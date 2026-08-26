@@ -1,6 +1,11 @@
 # YunKan-OpenVINO UI
 
+<img src="unraid-icon.png" width="88" alt="YunKan-UI 图标" align="right">
+
 **给 [云瞰 YunKan](https://github.com/mrtian2016/yunkan) 用的另一套 Web 工作台 —— 自由拼贴直播、AI 事件、时间轴回放。推理在盒子上，页面在浏览器里。**
+
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+[![Unofficial](https://img.shields.io/badge/YunKan-unofficial-lightgrey.svg)](https://github.com/mrtian2016/yunkan)
 
 [English](./README.md) · 官方产品：[mrtian2016/yunkan](https://github.com/mrtian2016/yunkan) · [yun-kan.com](https://yun-kan.com/zh-CN)
 
@@ -80,6 +85,57 @@ export YUNKAN_MEDIA=http://127.0.0.1:23406
 
 用官方界面同一套账号登录。本进程只反向代理 `/api/`、快照和 HLS，不会保存密码。
 
+环境变量（Docker 同样认这些）：
+
+| 变量 | 默认 | 用途 |
+| --- | --- | --- |
+| `YUNKAN_API` | `http://127.0.0.1:23326` | REST API |
+| `YUNKAN_MEDIA` | `http://127.0.0.1:23406` | 官方管理端 + HLS |
+| `PORT` | `18081` | 监听端口 |
+| `TZ` | `Asia/Shanghai` | 容器时区 |
+
+需要覆盖时把 [`.env.example`](./.env.example) 复制成 `.env`。
+
+## Docker
+
+不替换官方云瞰容器，只作为旁路工作台。
+
+```bash
+git clone https://github.com/s1oz/yunkan-ui.git
+cd yunkan-ui
+docker compose up -d --build
+```
+
+打开 `http://<主机>:18081/`。Compose 使用 **host** 网络，这样 `127.0.0.1:23326` / `:23406` 才能打到同一台机器上的云瞰。
+
+等价的 `docker run`：
+
+```bash
+docker build -t yunkan-ui:local .
+docker run -d --name YunKan-UI --network host --restart unless-stopped \
+  -e YUNKAN_API=http://127.0.0.1:23326 \
+  -e YUNKAN_MEDIA=http://127.0.0.1:23406 \
+  -e PORT=18081 \
+  yunkan-ui:local
+```
+
+云瞰在另一台机器上时，把 `YUNKAN_API` / `YUNKAN_MEDIA` 改成那台的地址。若改成 bridge 网络，要映射 `18081:18081`，**不要**再写 `127.0.0.1`（那是 UI 容器自己）。
+
+## Unraid
+
+1. 云瞰已经在跑（应用市场：**YunKan-OpenVINO** / CUDA / CPU）。不要动它。
+2. 克隆本仓库后用 Compose 启动：
+
+```bash
+git clone https://github.com/s1oz/yunkan-ui.git /mnt/user/appdata/yunkan-ui
+cd /mnt/user/appdata/yunkan-ui
+docker compose up -d --build
+```
+
+3. Docker 页会出现 **YunKan-UI**。地球图标打开 `http://[IP]:18081/`。图标是 [unraid-icon.png](./unraid-icon.png)。
+
+可选：把 [`templates/unraid.xml`](./templates/unraid.xml) 拷到 `/boot/config/plugins/dockerMan/templates-user/my-YunKan-UI.xml`，之后「添加容器」能选这个模板。镜像名是 `yunkan-ui:local`，要先构建（`docker compose build` 或 `docker build -t yunkan-ui:local .`）。不要 Compose 和模板各起一份。
+
 ## 「跳转原生系统设置」怎么拼地址
 
 顶栏齿轮**没有写死 IP**。它打开：
@@ -97,11 +153,15 @@ localStorage.setItem("yunkan.origUi", "http://你的主机:端口/settings")
 ## 目录
 
 ```text
-public/          静态界面（HTML / CSS / JS）
-  js/vendor/     hls.js
-serve.py         静态文件 + 同源反代
-start.sh         Linux / macOS 启动
-docs/screenshots README 配图（演示数据）
+public/              静态界面（HTML / CSS / JS）
+  js/vendor/         hls.js
+serve.py             静态文件 + 同源反代
+start.sh / start.bat Linux / Windows 启动
+Dockerfile           python:3.12-alpine 旁路容器
+docker-compose.yml   host 网络 compose（Unraid Compose Manager 可用）
+templates/unraid.xml Unraid Docker 模板
+unraid-icon.png      Unraid Docker 页图标
+docs/screenshots     README 配图（演示数据）
 ```
 
 `preview/` 是本地抓图草稿，不进入公开发布。

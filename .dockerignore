@@ -1,0 +1,9 @@
+preview/
+docs/
+__pycache__/
+*.pyc
+*.pyo
+start.bat
+.git
+.gitignore
+unraid-icon.png

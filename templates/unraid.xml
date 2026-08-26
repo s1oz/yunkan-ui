@@ -1,0 +1,39 @@
+<?xml version="1.0"?>
+<Container version="2">
+  <Name>YunKan-UI</Name>
+  <Repository>yunkan-ui:local</Repository>
+  <Registry>https://github.com/s1oz/yunkan-ui</Registry>
+  <Network>host</Network>
+  <MyIP/>
+  <MyMAC/>
+  <Shell>sh</Shell>
+  <Privileged>false</Privileged>
+  <Support>https://github.com/s1oz/yunkan-ui/issues</Support>
+  <Project>https://github.com/s1oz/yunkan-ui</Project>
+  <ReadMe>https://github.com/s1oz/yunkan-ui/blob/main/README.zh-CN.md</ReadMe>
+  <Overview>Unofficial YunKan / SkyView web workbench: free-form live mosaic, AI events, timeline playback. Does not replace the YunKan-OpenVINO container — reverse-proxies local API :23326 and HLS :23406.&#13;
+&#13;
+云瞰非官方 Web 工作台。先让 YunKan / SkyView 在本机跑起来（host 网络，23326 + 23406），再构建本镜像：&#13;
+  git clone https://github.com/s1oz/yunkan-ui.git /mnt/user/appdata/yunkan-ui&#13;
+  cd /mnt/user/appdata/yunkan-ui &amp;&amp; docker compose up -d --build&#13;
+或： docker build -t yunkan-ui:local /mnt/user/appdata/yunkan-ui&#13;
+&#13;
+WebUI 用官方同一套账号登录。演示：地址后加 ?demo=1。</Overview>
+  <Category>MediaApp:Video Network:Web</Category>
+  <WebUI>http://[IP]:[PORT:18081]/</WebUI>
+  <TemplateURL>https://raw.githubusercontent.com/s1oz/yunkan-ui/main/templates/unraid.xml</TemplateURL>
+  <Icon>https://raw.githubusercontent.com/s1oz/yunkan-ui/main/unraid-icon.png</Icon>
+  <ExtraParams>-m 512M</ExtraParams>
+  <PostArgs/>
+  <CPUset/>
+  <DateInstalled/>
+  <DonateText/>
+  <DonateLink/>
+  <Requires>A running YunKan / SkyView container on this host (ports 23326 and 23406). Build yunkan-ui:local from https://github.com/s1oz/yunkan-ui before applying this template, or use docker compose up --build in the cloned directory.</Requires>
+  <Config Name="Web UI port" Target="18081" Default="18081" Mode="tcp" Description="Workbench HTTP port. Host network binds 18081 on the Unraid host." Type="Port" Display="always" Required="true" Mask="false">18081</Config>
+  <Config Name="Backend API" Target="YUNKAN_API" Default="http://127.0.0.1:23326" Mode="" Description="YunKan REST API. Use 127.0.0.1 with host networking; on bridge, use the Unraid LAN IP." Type="Variable" Display="always" Required="true" Mask="false">http://127.0.0.1:23326</Config>
+  <Config Name="Media / stock admin" Target="YUNKAN_MEDIA" Default="http://127.0.0.1:23406" Mode="" Description="Official web UI + HLS media. Use 127.0.0.1 with host networking." Type="Variable" Display="always" Required="true" Mask="false">http://127.0.0.1:23406</Config>
+  <Config Name="Listen PORT" Target="PORT" Default="18081" Mode="" Description="Must match the Web UI port above." Type="Variable" Display="advanced" Required="true" Mask="false">18081</Config>
+  <Config Name="Timezone TZ" Target="TZ" Default="Asia/Shanghai" Mode="" Description="Container timezone." Type="Variable" Display="always" Required="true" Mask="false">Asia/Shanghai</Config>
+  <Config Name="UI source (optional)" Target="/app" Default="/mnt/user/appdata/yunkan-ui" Mode="ro" Description="Optional. Map the git clone so HTML/JS edits apply on restart without rebuilding. Leave empty to use files baked into the image." Type="Path" Display="always" Required="false" Mask="false"/>
+</Container>

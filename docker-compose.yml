@@ -1,0 +1,30 @@
+# YunKan-UI — sidecar for a running YunKan / SkyView box.
+# YunKan itself uses host networking; this UI does too so 127.0.0.1:23326 / :23406 work.
+#
+#   docker compose up -d --build
+#   open http://<host>:18081/
+#
+# If YunKan is on another machine, keep host mode or switch to bridge and
+# point YUNKAN_API / YUNKAN_MEDIA at that host.
+
+name: yunkan-ui
+
+services:
+  yunkan-ui:
+    build: .
+    image: yunkan-ui:local
+    container_name: YunKan-UI
+    network_mode: host
+    restart: unless-stopped
+    environment:
+      TZ: ${TZ:-Asia/Shanghai}
+      PORT: ${PORT:-18081}
+      YUNKAN_API: ${YUNKAN_API:-http://127.0.0.1:23326}
+      YUNKAN_MEDIA: ${YUNKAN_MEDIA:-http://127.0.0.1:23406}
+    labels:
+      net.unraid.docker.webui: "http://[IP]:[PORT:18081]/"
+      net.unraid.docker.icon: "https://raw.githubusercontent.com/s1oz/yunkan-ui/main/unraid-icon.png"
+      net.unraid.docker.shell: sh
+    # Live-edit the files in this directory without rebuilding:
+    # volumes:
+    #   - ./:/app:ro
