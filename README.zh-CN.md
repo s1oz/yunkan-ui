@@ -1,0 +1,127 @@
+# YunKan-OpenVINO UI
+
+**给 [云瞰 YunKan](https://github.com/mrtian2016/yunkan) 用的另一套 Web 工作台 —— 自由拼贴直播、AI 事件、时间轴回放。推理在盒子上，页面在浏览器里。**
+
+[English](./README.md) · 官方产品：[mrtian2016/yunkan](https://github.com/mrtian2016/yunkan) · [yun-kan.com](https://yun-kan.com/zh-CN)
+
+---
+
+这是一套**重写的 Web 界面**，不是原管理后台换皮。它对接官方 Docker 镜像已经提供的本地 API。录像和推理都留在你自己的机器上。
+
+> 非官方项目，与云瞰作者无隶属或背书关系。云瞰本体是商业闭源软件，按户授权。
+
+口号：**OpenVINO 加速，云瞰每一帧**。
+
+## 界面截图
+
+以下均为内置演示数据，没有真实摄像头，也没有内网地址。
+
+| 工作台拼贴 | AI 事件中心 |
+| :---: | :---: |
+| ![工作台](./docs/screenshots/live.png) | ![事件](./docs/screenshots/events.png) |
+| **录像回放 · 时间轴** | **加载项** |
+| ![回放](./docs/screenshots/replay.png) | ![加载项](./docs/screenshots/addons.png) |
+| **白天主题** | **手机** |
+| ![白天](./docs/screenshots/live-day.png) | ![手机](./docs/screenshots/live-mobile.png) |
+
+登录 / 预览：![登录](./docs/screenshots/login.png)
+
+## 能做什么
+
+- 🖥️ **自由拼贴工作台** —— 拖动、拉伸，竖屏门口和横屏客厅可以混排。点哪一路画面，就只出那一路声音。
+- 🔊 **浏览器能播的直播声音** —— 画面走 `live` / `detect` HLS，声音走 AAC 旁路。主码流 H.265 播不了会回退子码流。
+- ⚡ **事件栏** —— 摄像机 + 回家/离家，类型 + 置信度，相对时间和墙上时钟。右侧可折叠，画面铺满。
+- 🎯 **事件中心** —— 标注快照、检测框、运动轨迹，滚轮缩放 + 拖动平移，一键跳转回放。
+- 📼 **时间轴回放** —— 分段、事件、倍速、页内实时。右侧可筛 **全部** 或某一路摄像机。
+- 🧩 **加载项** —— 人物档案、训练、国标、HomeKit 等按需打开，用多少开多少。
+- 🌙 **白天 / 黑夜** —— 顶栏一个按钮切换。
+- ⚙️ **原生系统设置** —— 齿轮打开官方管理后台：用**当前主机名**，端口 `23406`（不是写死的 IP）。
+
+## 运行条件
+
+- 已经在跑的 **云瞰 / YunKan** 实例。本仓库不负责录像、检测或存盘。
+- Python 3.9+（静态服务只用标准库，不用 pip）。
+- Chromium / Firefox 系浏览器（自带 [hls.js](https://github.com/video-dev/hls.js/)）。
+
+官方镜像常见端口：
+
+| 端口 | 用途 |
+| --- | --- |
+| `23326` | REST API |
+| `23406` | 官方 Web 管理端 + HLS 媒体 |
+
+## 启动
+
+不接后端、只看演示界面：
+
+```bash
+python3 serve.py --host 0.0.0.0 --port 18081
+```
+
+打开 http://127.0.0.1:18081/ ，点 **预览完整界面**，或在地址后加 `?demo=1`。
+
+对接真实云瞰：
+
+```bash
+python3 serve.py \
+  --api   http://127.0.0.1:23326 \
+  --media http://127.0.0.1:23406 \
+  --host  0.0.0.0 \
+  --port  18081
+```
+
+也可以：
+
+```bash
+export YUNKAN_API=http://127.0.0.1:23326
+export YUNKAN_MEDIA=http://127.0.0.1:23406
+./start.sh
+```
+
+用官方界面同一套账号登录。本进程只反向代理 `/api/`、快照和 HLS，不会保存密码。
+
+## 「跳转原生系统设置」怎么拼地址
+
+顶栏齿轮**没有写死 IP**。它打开：
+
+```text
+当前页面的协议 + 当前主机名 + :23406/settings
+```
+
+例如你从 `http://nas.local:18081/` 打开本 UI，齿轮会去 `http://nas.local:23406/settings`。若官方管理端不在 23406，可在浏览器控制台执行：
+
+```js
+localStorage.setItem("yunkan.origUi", "http://你的主机:端口/settings")
+```
+
+## 目录
+
+```text
+public/          静态界面（HTML / CSS / JS）
+  js/vendor/     hls.js
+serve.py         静态文件 + 同源反代
+start.sh         Linux / macOS 启动
+docs/screenshots README 配图（演示数据）
+```
+
+`preview/` 是本地抓图草稿，不进入公开发布。
+
+## 隐私
+
+本仓库包含：
+
+- 没有局域网 IP
+- 没有 token / 密码
+- 没有真实监控画面（README 配图全部来自内置演示插画）
+
+不要把接了真实 NVR 的 `preview/` 截图提交上去，里面可能有家庭画面。
+
+## 许可
+
+本 UI 使用 MIT，见 [LICENSE](./LICENSE)。
+
+云瞰产品本身仍是商业闭源。请只在你有权运行的后端上使用本工作台。
+
+---
+
+*OpenVINO 加速，云瞰每一帧。*
