@@ -165,6 +165,25 @@ function loadLivePrefs() {
   if (!S.livePrefs.cams) S.livePrefs.cams = {};
   if (S.livePrefs.source !== "main") S.livePrefs.source = S.livePrefs.source || "sub";
   if (typeof S.livePrefs.muted !== "boolean") S.livePrefs.muted = true;
+  if (Object.prototype.hasOwnProperty.call(S.livePrefs, "audioId")) {
+    S.liveAudioId = S.livePrefs.audioId || null;
+  }
+}
+function defaultAudioCamId() {
+  const cams = S.cameras || [];
+  const hit = cams.find((c) => isOnline(c) && camId(c)) || cams.find((c) => camId(c));
+  return hit ? camId(hit) : null;
+}
+function ensureDefaultLiveAudio() {
+  if (Object.prototype.hasOwnProperty.call(S.livePrefs, "audioId")) {
+    S.liveAudioId = S.livePrefs.audioId || null;
+    return;
+  }
+  const id = defaultAudioCamId();
+  S.liveAudioId = id;
+  S.livePrefs.audioId = id;
+  if (id) S.livePrefs.cams[id] = { ...livePref(id), muted: false };
+  localStorage.setItem(LIVE_KEY, JSON.stringify(S.livePrefs));
 }
 function livePref(id) {
   const g = S.livePrefs || {};
@@ -475,7 +494,10 @@ function attachHls(video, url, key, muted = true, extra = {}) {
   stopPlayer(key);
   if (!url || !video) return false;
   video.muted = muted;
+  video.autoplay = true;
   video.playsInline = true;
+  video.setAttribute("playsinline", "");
+  video.setAttribute("autoplay", "");
   video.volume = 1;
   const behind = Number(extra.secondsBehind || 0);
   const onPlay = extra.onPlay || (() => {});
@@ -818,6 +840,7 @@ function bindMosaic() {
   if (!layoutValid(S.mosaicLayout)) layoutMosaic();
   startSnapRefresh();
   prefetchGrants();
+  startMosaicLive();
 }
 
 function startSnapRefresh() {
@@ -904,7 +927,9 @@ function tileWantsSound(id) {
 
 function setLiveAudio(id) {
   S.liveAudioId = id || null;
-  $$(".mtile").forEach((tile) => {
+  S.livePrefs.audioId = S.liveAudioId;
+  const tiles = $$(".mtile");
+  tiles.forEach((tile) => {
     const tid = tile.dataset.id;
     const on = tileWantsSound(tid);
     setLivePref(tid, { muted: !on });
@@ -913,6 +938,14 @@ function setLiveAudio(id) {
     if (muteBtn) muteBtn.textContent = on ? "有声" : "已静音";
     applyTileSound(tid, tile, on);
   });
+  if (!tiles.length) localStorage.setItem(LIVE_KEY, JSON.stringify(S.livePrefs));
+}
+
+async function startMosaicLive() {
+  if (!feat("live", "hls")) return;
+  const tiles = $$(".mtile");
+  if (!tiles.length) return;
+  await Promise.all(tiles.map((tile) => applyTileLive(tile.dataset.id, tile)));
 }
 
 async function focusTileAudio(id, tile) {
@@ -1105,8 +1138,8 @@ function homePage(recent) {
         return `<div class="mtile ${sounding ? "has-sound" : ""}" data-id="${esc(id)}" tabindex="0" style="${tileLayoutStyle(id)}">
           <div class="media">
             <img data-src="/api/cameras/${esc(id)}/snapshot" alt="" />
-            <video class="live-video" playsinline muted hidden></video>
-            <video class="live-aac" playsinline muted></video>
+            <video class="live-video" playsinline muted autoplay hidden></video>
+            <video class="live-aac" playsinline muted autoplay></video>
           </div>
           <div class="tile-tools">
             <button data-act="tile-src" data-id="${esc(id)}">${pref.source === "main" ? "主码流" : "子码流"}</button>
@@ -2147,13 +2180,10 @@ async function renderHome() {
   try { S.pack.metrics = await api.get("/api/system/metrics"); } catch {}
   try { S.pack.space = await api.get("/api/storage/space"); } catch {}
   try { S.pack.status = await api.get("/api/system/status"); } catch {}
+  ensureDefaultLiveAudio();
   root.innerHTML = homePage(S.recent);
   await hydrate(root);
   bindMosaic();
-  if (S.liveAudioId) {
-    const tile = $$(".mtile").find((t) => t.dataset.id === S.liveAudioId);
-    if (tile) applyTileLive(S.liveAudioId, tile);
-  }
 }
 async function renderEvents() {
   let data = {};
