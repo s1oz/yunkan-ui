@@ -139,6 +139,13 @@ function parseHash() {
   return { parts, query };
 }
 function go(to) { location.hash = to.startsWith("#") ? to : `#${to}`; }
+function hashPath() { return (location.hash || "#/home").replace(/^#/, ""); }
+function goSystemTab(tab) {
+  S.sysTab = tab || "overview";
+  const next = `/system?tab=${encodeURIComponent(S.sysTab)}`;
+  if (hashPath() === next) return render();
+  go(next);
+}
 function feat(mod, id) { return isOn(S.addons, mod, id); }
 function persistAddons() { saveAddons(S.addons); }
 
@@ -248,6 +255,33 @@ async function loadAlerts() {
     S.alerts = asList(sc, ["findings", "issues", "alerts"]);
     if (!S.alerts.length && Array.isArray(sc?.findings)) S.alerts = sc.findings;
   } catch { S.alerts = []; }
+}
+
+const FINDING_WHY = {
+  ep_init_failed: "OpenVINO 加速引擎初始化失败",
+  device_missing: "没有可用的核显设备",
+  no_igpu: "未检测到 Intel 核显",
+  gpu_not_available: "OpenVINO 认不到 GPU",
+};
+function findingText(f) {
+  if (f == null) return "";
+  if (typeof f === "string") return f;
+  if (f.message) return f.message;
+  const id = f.id || f.code || "";
+  const why = FINDING_WHY[f.reason] || f.reason || "加速未生效";
+  if (id === "inference_cpu_fallback") {
+    return `AI 推理配置为 ${f.configured || "OpenVINO"}，实际跑在 ${f.effective || "CPU"} 上（${why}）。不是宕机：检测还在工作，只是没用上核显，CPU 会更忙。`;
+  }
+  if (id === "decode_fallback") {
+    return `视频解码回退到软件解码（${why}）。画面仍能看，CPU 占用会升高。`;
+  }
+  return id || JSON.stringify(f);
+}
+function findingHtml(list) {
+  const findings = list || [];
+  if (!findings.length) return "";
+  return `<div class="sheet findings" style="margin-bottom:10px"><h3 style="margin-top:0">自检</h3>
+    ${findings.map((f) => `<p class="finding ${esc(f.severity || f.level || "warn")}">${esc(findingText(f))}</p>`).join("")}</div>`;
 }
 
 async function loadTripwires() {
@@ -649,7 +683,7 @@ function chrome(inner, wide = false) {
         <span class="stat">推理 <b>${esc(metricLabel(inferMs()))}</b></span>
         <span class="stat">解码 <b>${esc(metricLabel(decodeMs()))}</b></span>
       </span>
-      ${S.alerts.length ? `<button class="alert-btn" data-act="open-alerts" title="${esc(S.alerts[0].message || "异常日志")}">${I.alert}</button>` : ""}
+      ${S.alerts.length ? `<button class="alert-btn" data-act="open-alerts" title="${esc(findingText(S.alerts[0]) || "自检警告")}">${I.alert}</button>` : ""}
       ${u ? `
         <button class="unread-chip" data-act="open-unread" data-id="${esc(u.id)}" title="最新事件">
           ${eventSnap(u) ? `<img data-src="${esc(eventSnapUrl(u, { w: 160 }))}" alt="" />` : ""}
@@ -1664,7 +1698,7 @@ function systemPage(pack) {
   if (S.sysTab === "overview") {
     const st = pack.status || {};
     const metrics = pack.metrics || {};
-    body = `<div class="grid-2">
+    body = `${findingHtml(S.alerts)}<div class="grid-2">
       <div class="sheet"><h3 style="margin-top:0">运行时</h3>
         <p>推理 ${esc(st.inference || "OpenVINO")} · 解码 ${esc(st.decode || "VAAPI")}<br>
         CPU ${esc(metrics.cpu_pct ?? 18)}% · 内存 ${esc(metrics.rss_mb ?? 1240)} MB</p>
@@ -1693,10 +1727,8 @@ function systemPage(pack) {
     body = `<div class="grid-2"><div class="metric"><b>${fmtBytes(sp.used_bytes || sp.used)}</b><span>已用</span></div>
       <div class="metric"><b>${fmtBytes(sp.free_bytes || sp.free)}</b><span>剩余</span></div></div>`;
   } else if (S.sysTab === "logs") {
-    const findings = S.alerts || [];
     const lines = S.logs || [];
-    body = `${findings.length ? `<div class="sheet" style="margin-bottom:10px"><h3 style="margin-top:0">自检</h3>
-      ${findings.map((f) => `<p>${esc(f.message || f.code || JSON.stringify(f))}</p>`).join("")}</div>` : ""}
+    body = `${findingHtml(S.alerts)}
       <div class="log-box">${esc((lines.length ? lines : ["暂无日志"]).join("\n"))}</div>
       <div class="flex" style="margin-top:10px">
         <button class="btn sm" data-act="orig-settings" title="跳转原生系统设置">${I.gear} 系统设置</button>
@@ -2096,7 +2128,7 @@ async function render() {
   const parsed = parseHash();
   S.route = parsed.parts[0] || "home";
   if (parsed.query.cam) S.evCam = parsed.query.cam;
-  if (parsed.query.tab) S.sysTab = parsed.query.tab;
+  if (S.route === "system" && parsed.query.tab) S.sysTab = parsed.query.tab;
   if (!api.token && !api.demo) {
     await renderGate();
     return;
@@ -2317,8 +2349,7 @@ root.addEventListener("click", async (e) => {
       return;
     }
     if (act === "open-alerts") {
-      S.sysTab = "logs";
-      go("/system?tab=logs");
+      await goSystemTab("logs");
       return;
     }
     if (act === "cam-events") {
@@ -2503,7 +2534,7 @@ root.addEventListener("click", async (e) => {
     if (act === "id-tab") { S.identityTab = el.dataset.v; await render(); }
     if (act === "train-tab") { S.trainTab = el.dataset.v; await render(); }
     if (act === "integ-tab") { S.integTab = el.dataset.v; await render(); }
-    if (act === "sys-tab") { S.sysTab = el.dataset.v; await render(); }
+    if (act === "sys-tab") { await goSystemTab(el.dataset.v); return; }
     if (act === "enroll") { S.modal = { kind: "enroll", ctx: {} }; await render(); }
     if (act === "add-user") { S.modal = { kind: "add-user", ctx: {} }; await render(); }
     if (act === "det-pause") { await api.post("/api/detection/pause-all", {}); toast("已暂停", "ok"); await render(); }

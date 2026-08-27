@@ -129,6 +129,9 @@ a { color: var(--accent-2); text-decoration: none; }
 .dot { width: 6px; height: 6px; border-radius: 50%; background: var(--faint); display: inline-block; flex: none; }
 .dot.on { background: var(--ok); box-shadow: 0 0 6px var(--ok); }
 .dot.off { background: var(--bad); }
+.finding { margin: 0 0 8px; line-height: 1.55; }
+.finding.warn, .finding.warning { color: var(--warn); }
+.finding.error, .finding.bad { color: var(--bad); }
 
 /* Gate */
 .gate {
