@@ -283,7 +283,7 @@ export function installMock(api) {
       if (query.q) list = list.filter((e) => (e.summary || "").includes(query.q));
       return { items: list };
     }
-    if (p === "/api/events/unread-count") return { count: DB.events.filter((e) => e.unread).length };
+    if (p === "/api/events/unread-count") return { count: DB.events.filter((e) => e.unread || e.is_read === false).length };
     if (p === "/api/events/recent") {
       const list = DB.events.filter((e) => !query.camera || e.camera_id === query.camera);
       return { items: list.slice(0, Number(query.limit || 5)) };

@@ -240,13 +240,24 @@ export function parseExtra(e) {
   return x;
 }
 
+export function eventIsUnread(e) {
+  if (!e || typeof e !== "object") return false;
+  if (e.unread === true || e.is_unread === true) return true;
+  if (e.unread === false || e.is_unread === false) return false;
+  const read = e.is_read ?? e.read ?? e.has_read;
+  if (read === false || read === 0 || read === "0") return true;
+  if (read === true || read === 1 || read === "1") return false;
+  if ("read_at" in e) return !e.read_at;
+  return false;
+}
+
 export function normEvent(e) {
   if (!e || typeof e !== "object") return e;
   const extra = parseExtra(e);
   const id = e.id ?? e.event_id ?? e.uid;
   const camera_id = e.camera_id ?? e.camera ?? e.cam_id ?? e.channel_id ?? "";
   const event_time = e.event_time || e.ts || e.created_at || e.time || e.start_time || e.timestamp;
-  const unread = e.unread ?? (e.read === false) ?? (e.is_read === false) ?? false;
+  const unread = eventIsUnread(e);
   return {
     ...e,
     extra,

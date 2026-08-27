@@ -199,6 +199,7 @@ a { color: var(--accent-2); text-decoration: none; }
 .bar-cam:hover { background: var(--bg3); color: var(--ink); }
 .bar-cam b { font-weight: 650; }
 .bar-cam em { font-style: normal; color: var(--bad); font-weight: 700; }
+.bar-cam em.zero { color: var(--muted); font-weight: 500; }
 .clock {
   font-family: var(--mono); font-variant-numeric: tabular-nums;
   font-size: 12px; color: var(--ink); letter-spacing: .04em; min-width: 64px; text-align: center;
@@ -349,7 +350,11 @@ a { color: var(--accent-2); text-decoration: none; }
   cursor: pointer; align-items: start;
 }
 .ev:hover { background: var(--bg3); }
-.ev.unread { box-shadow: inset 2px 0 0 var(--accent); }
+.ev.unread {
+  box-shadow: inset 3px 0 0 var(--accent);
+  background: color-mix(in srgb, var(--accent) 9%, transparent);
+}
+.ev-l1 .ev-unread { margin-left: 6px; flex: none; vertical-align: middle; }
 .ev.sel { background: var(--bg3); }
 .ev img, .ev-ph { width: 72px; height: 54px; object-fit: cover; border-radius: 4px; background: #000; }
 .cam-pills { display: flex; align-items: center; gap: 4px; flex-wrap: wrap; }
@@ -364,8 +369,11 @@ a { color: var(--accent-2); text-decoration: none; }
 .ev-group:hover { color: var(--ink); }
 .ev-meta { display: grid; gap: 2px; min-width: 0; align-content: start; }
 .ev-l1 {
-  display: block; font-size: 12px; font-weight: 600; line-height: 1.3;
-  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  display: flex; align-items: center; gap: 6px;
+  font-size: 12px; font-weight: 600; line-height: 1.3; min-width: 0;
+}
+.ev-l1 .ev-name {
+  min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
 .ev-l2, .ev-l3 { font-style: normal; color: var(--muted); font-size: 11px; line-height: 1.3; }
 .ev-l3 { font-variant-numeric: tabular-nums; }

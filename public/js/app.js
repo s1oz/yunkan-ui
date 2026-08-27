@@ -1,7 +1,7 @@
 import {
   api, ApiError, asList, camId, camName, isOnline,
   fmtTime, fmtDay, eventTitle, eventSnap, eventSnapUrl, fmtBytes, eventList,
-  parseExtra, normEvent,
+  parseExtra, normEvent, eventIsUnread,
 } from "./api.js";
 import { installMock } from "./mock.js";
 import {
@@ -300,6 +300,8 @@ function mergeEventExtras(list, full) {
     if (!f) continue;
     const extra = { ...parseExtra(e), ...parseExtra(f) };
     e.extra = extra;
+    if (typeof f.unread === "boolean") e.unread = f.unread;
+    else if (f && typeof f === "object") e.unread = eventIsUnread({ ...e, ...f });
     if (!e.direction_label) e.direction_label = f.direction_label || extra.direction_label || "";
     if (!e.direction) e.direction = f.direction || extra.direction;
     if (!e.event_subtype) e.event_subtype = f.event_subtype || extra.event_subtype || "";
@@ -631,8 +633,8 @@ function camDayStats() {
   for (const c of S.cameras) map[camId(c)] = { unread: 0, total: 0 };
   const seen = new Set();
   for (const e of [...S.events, ...S.recent]) {
-    if (!e || seen.has(e.id)) continue;
-    seen.add(e.id);
+    if (!e || seen.has(String(e.id))) continue;
+    seen.add(String(e.id));
     if (fmtDay(e.event_time) !== today) continue;
     const id = String(e.camera_id || "");
     if (!map[id]) map[id] = { unread: 0, total: 0 };
@@ -640,6 +642,83 @@ function camDayStats() {
     if (e.unread) map[id].unread++;
   }
   return map;
+}
+
+function unreadActionsHtml() {
+  if (!S.unread) return "";
+  return `<span class="pill accent unread-pill">${S.unread > 99 ? "99+" : S.unread} 未读</span>
+    <button class="btn sm" data-act="read-all">全部已读</button>`;
+}
+
+function syncUnreadUi() {
+  const n = Math.max(0, Number(S.unread) || 0);
+  S.unread = n;
+  const nav = document.querySelector('.cats a[href="#/events"]');
+  if (nav) {
+    let b = nav.querySelector(".badge");
+    if (n) {
+      if (!b) { b = document.createElement("span"); b.className = "badge"; nav.appendChild(b); }
+      b.textContent = n > 99 ? "99+" : String(n);
+    } else b?.remove();
+  }
+  const chip = document.querySelector(".unread-chip .count");
+  if (n) {
+    if (chip) chip.textContent = n > 99 ? "99+" : String(n);
+  } else chip?.remove();
+  $$(".unread-pill").forEach((el) => {
+    if (n) el.textContent = `${n > 99 ? "99+" : n} 未读`;
+    else el.remove();
+  });
+  if (!n) $$("[data-act=read-all]").forEach((el) => el.remove());
+  const stats = camDayStats();
+  $$(".bar-cam").forEach((btn) => {
+    const st = stats[btn.dataset.id] || { unread: 0, total: 0 };
+    const em = $("em", btn);
+    if (!em) return;
+    em.textContent = st.unread;
+    em.classList.toggle("zero", !st.unread);
+  });
+}
+
+function markEventReadLocal(id) {
+  if (id == null || id === "") return;
+  let changed = false;
+  const touch = (e) => {
+    if (!e || String(e.id) !== String(id) || !e.unread) return;
+    e.unread = false;
+    changed = true;
+  };
+  S.recent.forEach(touch);
+  S.events.forEach(touch);
+  if (S.event) touch(S.event);
+  if (S.eventPop) touch(S.eventPop);
+  if (changed && S.unread > 0) S.unread -= 1;
+  $$(".ev").forEach((el) => {
+    if (String(el.dataset.id) !== String(id)) return;
+    el.classList.remove("unread");
+    el.querySelector(".ev-unread")?.remove();
+  });
+  syncUnreadUi();
+}
+
+async function markEventRead(id) {
+  if (id == null || id === "") return;
+  api.post(`/api/events/${encodeURIComponent(id)}/read`, {}).catch(() => {});
+  markEventReadLocal(id);
+}
+
+async function markAllEventsRead() {
+  await api.post("/api/events/read-all", {});
+  for (const e of [...S.recent, ...S.events]) if (e) e.unread = false;
+  if (S.event) S.event.unread = false;
+  if (S.eventPop) S.eventPop.unread = false;
+  S.unread = 0;
+  $$(".ev.unread").forEach((el) => {
+    el.classList.remove("unread");
+    el.querySelector(".ev-unread")?.remove();
+  });
+  syncUnreadUi();
+  toast("已全部已读", "ok");
 }
 
 function chrome(inner, wide = false) {
@@ -673,7 +752,7 @@ function chrome(inner, wide = false) {
           const id = camId(c);
           const st = stats[id] || { unread: 0, total: 0 };
           return `<button class="bar-cam" data-act="cam-events" data-id="${esc(id)}" title="打开该相机事件">
-            <i class="dot ${isOnline(c) ? "on" : "off"}"></i><b>${esc(camName(c))}</b> <em>${st.unread}</em>/${st.total}
+            <i class="dot ${isOnline(c) ? "on" : "off"}"></i><b>${esc(camName(c))}</b> <em class="${st.unread ? "" : "zero"}">${st.unread}</em>/${st.total}
           </button>`;
         }).join("")}
       </div>
@@ -1154,7 +1233,7 @@ function eventCard(ev, opts = {}) {
     <div class="ev ${ev.unread ? "unread" : ""} ${extra}" data-act="${esc(act)}" data-id="${esc(ev.id)}" ${attrs}>
       ${snap ? `<img data-src="${esc(eventSnapUrl(ev, { annotate: true, w: 320 }))}" alt="" />` : `<div class="ev-ph"></div>`}
       <div class="ev-meta">
-        <b class="ev-l1" title="${esc(l1)}">${esc(l1)}</b>
+        <b class="ev-l1" title="${esc(l1)}"><span class="ev-name">${esc(l1)}</span>${ev.unread ? `<span class="pill accent ev-unread">未读</span>` : ""}</b>
         <i class="ev-l2">${esc(l2)}</i>
         <i class="ev-l3">${esc(l3)}</i>
       </div>
@@ -1190,7 +1269,7 @@ function homePage(recent) {
       <aside class="rail">
         <div class="rail-h">事件 <span class="pill">${list.length}</span>
           <div class="grow"></div>
-          ${S.unread ? `<span class="pill accent">${S.unread} 未读</span>` : ""}
+          ${unreadActionsHtml()}
           <button class="btn sm ghost" data-act="reset-layout">重置布局</button>
           <button class="btn icon ghost" data-act="toggle-rail" title="折叠事件栏">${I.panel}</button>
         </div>
@@ -1225,7 +1304,8 @@ function eventsPage() {
       <div class="ev-view" id="ev-view">${eventStageHtml(ev)}</div>
       <aside class="rail">
         <div class="rail-h">
-          <input class="search" data-act="ev-q" placeholder="搜索" value="${esc(S.q)}" style="width:100%" />
+          <input class="search" data-act="ev-q" placeholder="搜索" value="${esc(S.q)}" style="width:140px;flex:1" />
+          ${unreadActionsHtml()}
         </div>
         <div class="toolbar cam-filter" style="padding:6px 8px;margin:0">
           <button class="chip ${!S.evCam ? "on" : ""}" data-act="cam-events" data-id="">全部</button>
@@ -1744,7 +1824,7 @@ function systemPage(pack) {
   return chrome(`
     <p class="page-kicker">系统</p>
     <div class="toolbar">
-      <h1 class="page-title" style="margin:0;font-size:28px">机房里的事</h1>
+      <h1 class="page-title" style="margin:0;font-size:28px">系统</h1>
       <div class="grow"></div>
       ${tabs.map(([k, l]) => `<button class="chip ${S.sysTab === k ? "on" : ""}" data-act="sys-tab" data-v="${k}">${l}</button>`).join("")}
       <button class="btn sm" data-act="orig-settings" title="跳转原生系统设置">${I.gear} 系统设置</button>
@@ -1877,7 +1957,7 @@ async function showEventPop(id) {
     }
   } catch {}
   if (!ev) return;
-  api.post(`/api/events/${id}/read`, {}).catch(() => {});
+  await markEventRead(id);
   ev.unread = false;
   S.eventPop = ev;
   await loadEventTrack(ev);
@@ -2370,6 +2450,7 @@ root.addEventListener("click", async (e) => {
     if (act === "select-ev") {
       zoomMap.delete("ev");
       S.event = S.events.find((x) => String(x.id) === String(el.dataset.id)) || S.event;
+      await markEventRead(el.dataset.id);
       if (S.event) await loadEventTrack(S.event);
       const view = $("#ev-view");
       if (view) {
@@ -2518,7 +2599,11 @@ root.addEventListener("click", async (e) => {
     if (act === "discover") toast("正在扫描局域网…", "ok");
     if (act === "open-events") { S.evCam = el.dataset.id; go("/events?cam=" + encodeURIComponent(el.dataset.id)); }
     if (act === "ev-type") { S.evType = el.dataset.v; await render(); }
-    if (act === "read-all") { await api.post("/api/events/read-all", {}); toast("已全部已读", "ok"); await render(); }
+    if (act === "read-all") {
+      e.preventDefault();
+      await markAllEventsRead();
+      return;
+    }
     if (act === "open-ev") { await showEventPop(el.dataset.id); return; }
     if (act === "fb") { await api.post(`/api/events/${el.dataset.id}/feedback`, { verdict: el.dataset.v }); toast("已记录", "ok"); }
     if (act === "del-ev") {
