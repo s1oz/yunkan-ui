@@ -230,6 +230,13 @@ a { color: var(--accent-2); text-decoration: none; }
 
 .stage { padding: 14px 16px 20px; max-width: 1280px; margin: 0 auto; width: 100%; }
 .stage.wide, .stage.fill { max-width: none; padding: 0; height: calc(100vh - var(--bar)); min-height: 0; }
+#home-keep {
+  position: fixed; left: 0; right: 0; top: var(--bar); bottom: 0;
+  visibility: hidden; pointer-events: none; z-index: 2;
+}
+#home-keep .protect { height: 100%; }
+body.yk-home #home-keep { visibility: visible; pointer-events: auto; }
+body.yk-home .stage.fill { visibility: hidden; pointer-events: none; }
 .page-kicker { color: var(--muted); font-size: 11px; letter-spacing: .12em; text-transform: uppercase; margin: 0 0 4px; }
 .page-title { font-size: 20px; margin: 0 0 8px; letter-spacing: -.02em; font-weight: 650; }
 .page-lead { margin: 0 0 16px; color: var(--muted); max-width: 64ch; }
@@ -289,6 +296,8 @@ a { color: var(--accent-2); text-decoration: none; }
   border: 1px solid rgba(255,255,255,.06);
 }
 .mtile:hover { z-index: 2; outline: 1px solid var(--accent); outline-offset: -1px; }
+.protect.layout-lock .mtile { cursor: default; }
+.protect.layout-lock .mtile .rz { display: none; }
 .mtile .rz {
   position: absolute; right: 0; bottom: 0; width: 16px; height: 16px; z-index: 4;
   cursor: nwse-resize; background: linear-gradient(135deg, transparent 50%, var(--accent) 50%);

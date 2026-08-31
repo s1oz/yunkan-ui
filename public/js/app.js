@@ -37,6 +37,8 @@ const I = {
   sun: `<svg width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.7"><circle cx="7.5" cy="7.5" r="3"/><path d="M7.5 1.5v1.5M7.5 12v1.5M1.5 7.5H3M12 7.5h1.5M3.2 3.2l1.1 1.1M10.7 10.7l1.1 1.1M3.2 11.8l1.1-1.1M10.7 4.3l1.1-1.1"/></svg>`,
   moon: `<svg width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M13 9.2A5.2 5.2 0 0 1 6.8 2 5.4 5.4 0 1 0 13 9.2z"/></svg>`,
   panel: `<svg width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.7"><rect x="2" y="3" width="11" height="10" rx="1.5"/><path d="M9.5 3v10"/></svg>`,
+  lock: `<svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.7"><rect x="3" y="7" width="8" height="6" rx="1"/><path d="M5 7V5.2a2 2 0 0 1 4 0V7"/></svg>`,
+  unlock: `<svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.7"><rect x="3" y="7" width="8" height="6" rx="1"/><path d="M5 7V5.2a2 2 0 0 1 3.7-.9"/></svg>`,
 };
 const ICONS = { cam: I.cam, bolt: I.bolt, clock: I.clock, user: I.user, chip: I.chip, plug: I.plug, gear: I.gear, grid: I.grid, home: I.home };
 
@@ -46,6 +48,7 @@ const THEME_KEY = "yunkan.theme";
 const LIVE_KEY = "yunkan.livePrefs";
 const ORIG_KEY = "yunkan.origUi";
 const RAIL_KEY = "yunkan.railOn";
+const LOCK_KEY = "yunkan.layoutLock";
 
 const S = {
   route: "home",
@@ -84,6 +87,7 @@ const S = {
   mosaicLayout: null,
   liveAudioId: null,
   railOn: localStorage.getItem(RAIL_KEY) !== "0",
+  layoutLock: localStorage.getItem(LOCK_KEY) === "1",
   replayEvAll: false,
   tlStart: 0,
   tlEnd: 0,
@@ -105,7 +109,17 @@ let clockTimer = 0;
 
 const blobs = new Set();
 function blobUrl(b) { const u = URL.createObjectURL(b); blobs.add(u); return u; }
-function wipeBlobs() { for (const u of blobs) URL.revokeObjectURL(u); blobs.clear(); }
+function wipeBlobs() {
+  const keep = new Set();
+  $$("#home-keep img").forEach((img) => {
+    if (img.src && img.src.startsWith("blob:")) keep.add(img.src);
+  });
+  for (const u of [...blobs]) {
+    if (keep.has(u)) continue;
+    URL.revokeObjectURL(u);
+    blobs.delete(u);
+  }
+}
 
 const players = new Map();
 function stopPlayer(key) {
@@ -117,6 +131,24 @@ function stopPlayer(key) {
 }
 function stopAllPlayers() {
   for (const key of [...players.keys()]) stopPlayer(key);
+}
+function mosaicAlive() {
+  return !!$("#home-keep .mtile");
+}
+function stopPagePlayers() {
+  for (const key of [...players.keys()]) {
+    if (mosaicAlive() && (key.startsWith("tile-") || key.startsWith("aac-"))) continue;
+    stopPlayer(key);
+  }
+}
+function discardMosaic() {
+  document.body.classList.remove("yk-home");
+  const keep = $("#home-keep");
+  if (keep) keep.innerHTML = "";
+  S._mosaicKey = "";
+  for (const key of [...players.keys()]) {
+    if (key.startsWith("tile-") || key.startsWith("aac-")) stopPlayer(key);
+  }
 }
 function stopTilePlayers(id) {
   stopPlayer("tile-" + id);
@@ -196,7 +228,7 @@ function livePref(id) {
   const g = S.livePrefs || {};
   const p = (g.cams && g.cams[id]) || {};
   return {
-    source: p.source || g.source || "sub",
+    source: p.source === "main" ? "main" : "sub",
     muted: typeof p.muted === "boolean" ? p.muted : (typeof g.muted === "boolean" ? g.muted : true),
   };
 }
@@ -204,7 +236,6 @@ function setLivePref(id, patch) {
   if (!S.livePrefs.cams) S.livePrefs.cams = {};
   if (id) S.livePrefs.cams[id] = { ...livePref(id), ...patch };
   else Object.assign(S.livePrefs, patch);
-  if (patch.source) S.livePrefs.source = patch.source;
   if (typeof patch.muted === "boolean" && !id) S.livePrefs.muted = patch.muted;
   localStorage.setItem(LIVE_KEY, JSON.stringify(S.livePrefs));
 }
@@ -421,6 +452,8 @@ function metricLabel(n) {
 async function fillAuthImg(img) {
   const src = img.dataset.src;
   if (!src) return;
+  const tile = img.closest(".mtile");
+  if (tile && isTilePlaying(tile)) return;
   try {
     const r = await api.blob(src);
     if (r) img.src = blobUrl(r.blob);
@@ -483,10 +516,19 @@ function grantFresh(g) {
 async function ensureGrant(id, force = false) {
   const cur = S.grants && S.grants[id];
   if (!force && grantFresh(cur)) return cur;
-  const g = await api.post(`/api/cameras/${encodeURIComponent(id)}/live-grant`, {});
-  S.grants = S.grants || {};
-  S.grants[id] = g;
-  return g;
+  S._grantWait = S._grantWait || {};
+  if (!force && S._grantWait[id]) return S._grantWait[id];
+  const p = api.post(`/api/cameras/${encodeURIComponent(id)}/live-grant`, {}).then((g) => {
+    S.grants = S.grants || {};
+    S.grants[id] = g;
+    delete S._grantWait[id];
+    return g;
+  }).catch((err) => {
+    delete S._grantWait[id];
+    throw err;
+  });
+  S._grantWait[id] = p;
+  return p;
 }
 
 async function grantLive(id, source) {
@@ -543,7 +585,9 @@ function attachHls(video, url, key, muted = true, extra = {}) {
     const hls = new window.Hls({
       enableWorker: true,
       lowLatencyMode: !behind,
-      liveSyncDuration: behind ? Math.max(1, behind) : 3,
+      liveSyncDuration: behind ? Math.max(1, behind) : 2,
+      liveMaxLatencyDuration: behind ? undefined : 8,
+      maxLiveSyncPlaybackRate: behind ? 1 : 1.8,
     });
     hls.loadSource(url);
     hls.attachMedia(video);
@@ -563,7 +607,7 @@ function attachHls(video, url, key, muted = true, extra = {}) {
       if (d?.fatal) { try { hls.destroy(); } catch {} failOnce(); }
     });
     setTimeout(() => { if (!shown) failOnce(); }, needVideo ? 8000 : 6000);
-    players.set(key, { hls, video, url });
+    players.set(key, { hls, video, url, live: !behind });
     return true;
   }
   if (video.canPlayType("application/vnd.apple.mpegurl")) {
@@ -575,7 +619,7 @@ function attachHls(video, url, key, muted = true, extra = {}) {
     }, { once: true });
     video.addEventListener("error", onFail, { once: true });
     setTimeout(() => { if (needVideo && video.videoWidth <= 0) onFail(); }, 8000);
-    players.set(key, { hls: null, video, url });
+    players.set(key, { hls: null, video, url, live: !behind });
     return true;
   }
   return false;
@@ -896,7 +940,27 @@ function panViewPointer(el, key, e) {
   return true;
 }
 
+function catchUpLive(p) {
+  if (!p || !p.live || !p.video) return false;
+  const video = p.video;
+  try {
+    if (video.paused) video.play().catch(() => {});
+    let target = null;
+    if (p.hls && p.hls.liveSyncPosition != null && Number.isFinite(p.hls.liveSyncPosition)) {
+      target = p.hls.liveSyncPosition;
+    } else if (video.buffered && video.buffered.length) {
+      target = video.buffered.end(video.buffered.length - 1) - 1.2;
+    }
+    if (target != null && Number.isFinite(target) && target - video.currentTime > 2.5) {
+      video.currentTime = Math.max(0, target);
+      return true;
+    }
+  } catch {}
+  return false;
+}
+
 function persistMosaic() {
+  if (S.layoutLock) return;
   const box = $("#mosaic");
   if (!box) return;
   const W = box.clientWidth, H = box.clientHeight;
@@ -942,7 +1006,7 @@ function layoutMosaic() {
   if (!layoutValid(S.mosaicLayout)) persistMosaic();
 }
 
-function bindMosaic() {
+function bindMosaic(opts = {}) {
   const box = $("#mosaic");
   if (!box) return;
   if (mosaicObs) mosaicObs.disconnect();
@@ -952,15 +1016,20 @@ function bindMosaic() {
   mosaicObs.observe(box);
   if (!layoutValid(S.mosaicLayout)) layoutMosaic();
   startSnapRefresh();
+  if (opts.keepLive) {
+    startLiveWatch();
+    return;
+  }
   prefetchGrants();
   startMosaicLive();
+  startLiveWatch();
 }
 
 function startSnapRefresh() {
   if (S._snapTimer) clearInterval(S._snapTimer);
   const last = S._snapBlobs || (S._snapBlobs = {});
   const tick = () => {
-    if (document.hidden) return;
+    if (document.hidden || !document.body.classList.contains("yk-home")) return;
     $$(".mtile").forEach((tile) => {
       if (isTilePlaying(tile)) return;
       const img = $("img", tile);
@@ -1061,6 +1130,44 @@ async function startMosaicLive() {
   await Promise.all(tiles.map((tile) => applyTileLive(tile.dataset.id, tile)));
 }
 
+function startLiveWatch() {
+  if (S._liveWatch) clearInterval(S._liveWatch);
+  S._liveWatch = setInterval(() => {
+    if (document.hidden || !document.body.classList.contains("yk-home") || !$("#mosaic")) return;
+    $$(".mtile").forEach((tile) => {
+      const id = tile.dataset.id;
+      const p = players.get("tile-" + id);
+      if (!p) return;
+      catchUpLive(p);
+    });
+  }, 8000);
+}
+
+let mosaicRecovering = false;
+async function recoverMosaicLive(forceRestart = false) {
+  if (!$("#mosaic") || mosaicRecovering) return;
+  if (!document.body.classList.contains("yk-home")) return;
+  mosaicRecovering = true;
+  try {
+    const hiddenFor = S._hiddenAt ? Date.now() - S._hiddenAt : 0;
+    S._hiddenAt = 0;
+    const restart = forceRestart || hiddenFor > 5000;
+    for (const tile of $$(".mtile")) {
+      const id = tile.dataset.id;
+      if (!id) continue;
+      const p = players.get("tile-" + id);
+      if (!restart && p && isTilePlaying(tile)) {
+        catchUpLive(p);
+        applyTileSound(id, tile, tileWantsSound(id));
+        continue;
+      }
+      await applyTileLive(id, tile);
+    }
+  } finally {
+    mosaicRecovering = false;
+  }
+}
+
 async function focusTileAudio(id, tile) {
   if (!id || !tile) return;
   const already = tileWantsSound(id) && isTilePlaying(tile);
@@ -1084,6 +1191,11 @@ async function applyTileLive(id, tile) {
   try {
     const grant = await ensureGrant(id);
     const url = hlsFromGrant(grant, pref.source);
+    const cur = players.get("tile-" + id);
+    if (cur && cur.url === url && isTilePlaying(tile)) {
+      applyTileSound(id, tile, tileWantsSound(id));
+      return true;
+    }
     if (!url) { showTileSnap(tile); toast("该路暂无直播流", "bad"); return false; }
     let failed = false;
     video.muted = true;
@@ -1240,10 +1352,10 @@ function eventCard(ev, opts = {}) {
     </div>`;
 }
 
-function homePage(recent) {
+function homeMosaicHtml(recent) {
   const list = [...(recent || [])].sort((a, b) => toMs(b.event_time) - toMs(a.event_time));
-  return chrome(`
-    <div class="protect ${S.railOn ? "" : "rail-off"}">
+  return `
+    <div class="protect ${S.railOn ? "" : "rail-off"} ${S.layoutLock ? "layout-lock" : ""}">
       <div class="mosaic" id="mosaic">${S.cameras.map((c) => {
         const id = camId(c);
         const pref = livePref(id);
@@ -1258,7 +1370,7 @@ function homePage(recent) {
             <button data-act="tile-src" data-id="${esc(id)}">${pref.source === "main" ? "主码流" : "子码流"}</button>
             <button data-act="tile-mute" data-id="${esc(id)}">${sounding ? "有声" : "已静音"}</button>
           </div>
-          <div class="zoom-hint">点击切声 · 拖动 · 滚轮放大</div>
+          <div class="zoom-hint">${S.layoutLock ? "点击切声 · 滚轮放大" : "点击切声 · 拖动 · 滚轮放大"}</div>
           <div class="cap"><i class="dot ${isOnline(c) ? "on" : "off"}"></i>${esc(camName(c))}
             ${c.detection_enabled ? `<span class="pill accent">AI</span>` : ""}
             <span class="snd-flag pill ready">有声</span></div>
@@ -1270,12 +1382,25 @@ function homePage(recent) {
         <div class="rail-h">事件 <span class="pill">${list.length}</span>
           <div class="grow"></div>
           ${unreadActionsHtml()}
+          <button class="btn sm ghost" data-act="toggle-lock" title="${S.layoutLock ? "解锁布局" : "锁定布局，禁止拖动拉伸"}">${S.layoutLock ? I.lock : I.unlock} ${S.layoutLock ? "已锁定" : "锁定布局"}</button>
           <button class="btn sm ghost" data-act="reset-layout">重置布局</button>
           <button class="btn icon ghost" data-act="toggle-rail" title="折叠事件栏">${I.panel}</button>
         </div>
         <div class="rail-list">${list.map((ev) => eventCard(ev)).join("") || `<div class="empty">暂无事件</div>`}</div>
       </aside>
-    </div>`, true);
+    </div>`;
+}
+
+function refreshHomeRail() {
+  const list = [...(S.recent || [])].sort((a, b) => toMs(b.event_time) - toMs(a.event_time));
+  const rail = $("#home-keep .rail-list");
+  if (rail) rail.innerHTML = list.map((ev) => eventCard(ev)).join("") || `<div class="empty">暂无事件</div>`;
+  const pill = $("#home-keep .rail-h .pill");
+  if (pill) pill.textContent = String(list.length);
+}
+
+function mosaicCamKey() {
+  return (S.cameras || []).map((c) => camId(c)).join("|");
 }
 
 function eventStageHtml(ev) {
@@ -2155,6 +2280,7 @@ function tickReplay() {
 }
 
 const root = $("#root");
+const frame = () => $("#frame") || root;
 
 function enterDemo() {
   api.setDemo(true);
@@ -2201,15 +2327,20 @@ async function submitGate(form) {
 }
 
 async function render() {
-  stopAllPlayers();
-  if (S._snapTimer) { clearInterval(S._snapTimer); S._snapTimer = 0; }
-  wipeBlobs();
-  if (replayTimer) { cancelAnimationFrame(replayTimer); replayTimer = 0; }
   const parsed = parseHash();
   S.route = parsed.parts[0] || "home";
+  const enteringHome = S.route === "home" || S.route === "live";
+  if (!enteringHome) document.body.classList.remove("yk-home");
+  stopPagePlayers();
+  if (S._snapTimer) { clearInterval(S._snapTimer); S._snapTimer = 0; }
+  if (S._liveWatch) { clearInterval(S._liveWatch); S._liveWatch = 0; }
+  wipeBlobs();
+  if (replayTimer) { cancelAnimationFrame(replayTimer); replayTimer = 0; }
   if (parsed.query.cam) S.evCam = parsed.query.cam;
   if (S.route === "system" && parsed.query.tab) S.sysTab = parsed.query.tab;
   if (!api.token && !api.demo) {
+    discardMosaic();
+    stopAllPlayers();
     await renderGate();
     return;
   }
@@ -2226,6 +2357,8 @@ async function render() {
   } catch (e) {
     if (e.status === 401) {
       api.setToken(""); api.setDemo(false);
+      discardMosaic();
+      stopAllPlayers();
       toast("登录已失效，请重新登录", "bad");
       await renderGate();
       return;
@@ -2234,29 +2367,29 @@ async function render() {
   }
 
   if (S.route === "home" || S.route === "live") await renderHome();
-  else if (S.route === "addons") root.innerHTML = addonsPage();
+  else if (S.route === "addons") frame().innerHTML = addonsPage();
   else if (S.route === "events") {
-    if (!isOn(S.addons, "events")) root.innerHTML = locked("events");
+    if (!isOn(S.addons, "events")) frame().innerHTML = locked("events");
     else await renderEvents();
   }
   else if (S.route === "replay") {
-    if (!isOn(S.addons, "replay")) root.innerHTML = locked("replay");
+    if (!isOn(S.addons, "replay")) frame().innerHTML = locked("replay");
     else await renderReplay();
   }
   else if (S.route === "identities") {
-    if (!isOn(S.addons, "identities")) root.innerHTML = locked("identities");
+    if (!isOn(S.addons, "identities")) frame().innerHTML = locked("identities");
     else await renderIds();
   }
   else if (S.route === "training") {
-    if (!isOn(S.addons, "training")) root.innerHTML = locked("training");
+    if (!isOn(S.addons, "training")) frame().innerHTML = locked("training");
     else await renderTraining();
   }
   else if (S.route === "integrations") {
-    if (!isOn(S.addons, "integrations")) root.innerHTML = locked("integrations");
+    if (!isOn(S.addons, "integrations")) frame().innerHTML = locked("integrations");
     else await renderInteg();
   }
   else if (S.route === "system") {
-    if (!isOn(S.addons, "system")) root.innerHTML = locked("system");
+    if (!isOn(S.addons, "system")) frame().innerHTML = locked("system");
     else await renderSystem();
   } else await renderHome();
 
@@ -2284,7 +2417,8 @@ async function renderGate() {
       }
     } catch {}
   }
-  root.innerHTML = gateView(kind, extra);
+  discardMosaic();
+  frame().innerHTML = gateView(kind, extra);
 }
 
 async function renderHome() {
@@ -2293,8 +2427,22 @@ async function renderHome() {
   try { S.pack.space = await api.get("/api/storage/space"); } catch {}
   try { S.pack.status = await api.get("/api/system/status"); } catch {}
   ensureDefaultLiveAudio();
-  root.innerHTML = homePage(S.recent);
-  await hydrate(root);
+  document.body.classList.add("yk-home");
+  frame().innerHTML = chrome("", true);
+  const keep = $("#home-keep");
+  const key = mosaicCamKey();
+  const reuse = keep && keep.querySelector(".mtile") && S._mosaicKey === key;
+  if (reuse) {
+    const p = $(".protect", keep);
+    p?.classList.toggle("rail-off", !S.railOn);
+    p?.classList.toggle("layout-lock", S.layoutLock);
+    refreshHomeRail();
+    bindMosaic({ keepLive: true });
+    recoverMosaicLive(false);
+    return;
+  }
+  if (keep) keep.innerHTML = homeMosaicHtml(S.recent);
+  S._mosaicKey = key;
   bindMosaic();
 }
 async function renderEvents() {
@@ -2309,7 +2457,7 @@ async function renderEvents() {
   if (S.evCam) S.events = S.events.filter((e) => String(e.camera_id) === String(S.evCam));
   if (!S.event || (S.evCam && String(S.event.camera_id) !== String(S.evCam))) S.event = S.events[0] || null;
   if (S.event) await loadEventTrack(S.event);
-  root.innerHTML = eventsPage();
+  frame().innerHTML = eventsPage();
   await hydrate(root);
   bindEventOverlay();
   const frame = $("#ev-frame");
@@ -2321,7 +2469,7 @@ async function renderReplay() {
   if (!S.replayAt) S.replayAt = Date.now();
   ensureTlWindow();
   await loadReplayData();
-  root.innerHTML = replayPage();
+  frame().innerHTML = replayPage();
   await hydrate(root);
   await playReplaySource();
   if (S.replayPlaying) tickReplay();
@@ -2334,7 +2482,7 @@ async function renderIds() {
   try { people = asList(await api.get("/api/people", { status: "all" })); } catch {}
   try { pets = asList(await api.get("/api/pets")); } catch {}
   try { visits = asList(await api.get("/api/visits", { limit: 40 })); } catch {}
-  root.innerHTML = idsPage(people, pets, visits);
+  frame().innerHTML = idsPage(people, pets, visits);
   await hydrate(root);
 }
 async function renderTraining() {
@@ -2343,14 +2491,14 @@ async function renderTraining() {
   try { pack.stats = await api.get("/api/training/annotations/stats"); } catch {}
   try { pack.models = await api.get("/api/tensorrt/models"); } catch {}
   try { pack.vlm = await api.get("/api/system/vlm/models"); } catch {}
-  root.innerHTML = trainingPage(pack);
+  frame().innerHTML = trainingPage(pack);
 }
 async function renderInteg() {
   const pack = {};
   try { pack.gb = await api.get("/api/gb28181/devices"); } catch {}
   try { pack.gbCfg = await api.get("/api/gb28181/config"); } catch {}
   try { pack.hk = await api.get("/api/homekit/cameras"); } catch {}
-  root.innerHTML = integPage(pack);
+  frame().innerHTML = integPage(pack);
 }
 async function renderSystem() {
   const pack = {};
@@ -2367,7 +2515,7 @@ async function renderSystem() {
     } catch { S.logs = []; }
   }
   S.pack = { ...S.pack, ...pack };
-  root.innerHTML = systemPage(pack);
+  frame().innerHTML = systemPage(pack);
 }
 
 root.addEventListener("submit", async (e) => {
@@ -2397,7 +2545,11 @@ root.addEventListener("click", async (e) => {
   try {
     if (act === "do-login") { e.preventDefault(); e.stopPropagation(); await submitGate(el.closest("form")); return; }
     if (act === "demo") { enterDemo(); enterApp(); go("/home"); await render(); return; }
-    if (act === "logout") { api.logout(); S.me = null; S.cameras = []; go("/home"); await render(); return; }
+    if (act === "logout") {
+      discardMosaic();
+      stopAllPlayers();
+      api.logout(); S.me = null; S.cameras = []; go("/home"); await render(); return;
+    }
     if (act === "toggle-nav") {
       S.navOn = !S.navOn;
       localStorage.setItem(NAV_KEY, S.navOn ? "1" : "0");
@@ -2414,6 +2566,19 @@ root.addEventListener("click", async (e) => {
       applyTheme();
       el.title = themeIsDay() ? "切换到黑夜模式" : "切换到白天模式";
       el.innerHTML = themeIsDay() ? I.moon : I.sun;
+      return;
+    }
+    if (act === "toggle-lock") {
+      S.layoutLock = !S.layoutLock;
+      localStorage.setItem(LOCK_KEY, S.layoutLock ? "1" : "0");
+      const p = $(".protect");
+      p?.classList.toggle("layout-lock", S.layoutLock);
+      el.innerHTML = `${S.layoutLock ? I.lock : I.unlock} ${S.layoutLock ? "已锁定" : "锁定布局"}`;
+      el.title = S.layoutLock ? "解锁布局" : "锁定布局，禁止拖动拉伸";
+      $$(".zoom-hint").forEach((h) => {
+        h.textContent = S.layoutLock ? "点击切声 · 滚轮放大" : "点击切声 · 拖动 · 滚轮放大";
+      });
+      toast(S.layoutLock ? "布局已锁定" : "布局已解锁", "ok");
       return;
     }
     if (act === "toggle-rail") {
@@ -2670,7 +2835,7 @@ root.addEventListener("pointerdown", (e) => {
     window.addEventListener("pointerup", up);
     return;
   }
-  if (e.target.closest(".tile-tools, [data-act=tile-src], [data-act=tile-mute], [data-act=reset-layout], [data-act=toggle-rail], .ev-tools, .evpop-h, .evpop-f")) return;
+  if (e.target.closest(".tile-tools, [data-act=tile-src], [data-act=tile-mute], [data-act=reset-layout], [data-act=toggle-rail], [data-act=toggle-lock], .ev-tools, .evpop-h, .evpop-f")) return;
   const pw = e.target.closest(".player-wrap");
   if (pw) {
     const stage = $("#rp-stage", pw) || pw;
@@ -2689,6 +2854,7 @@ root.addEventListener("pointerdown", (e) => {
   const st = zoomMap.get(id) || { s: 1, x: 0, y: 0 };
   const br = box.getBoundingClientRect();
   if (e.target.closest("[data-act=tile-rz]")) {
+    if (S.layoutLock) return;
     e.preventDefault();
     e.stopPropagation();
     const x0 = tile.offsetLeft, y0 = tile.offsetTop;
@@ -2722,6 +2888,10 @@ root.addEventListener("pointerdown", (e) => {
     };
     window.addEventListener("pointermove", move);
     window.addEventListener("pointerup", up);
+    return;
+  }
+  if (S.layoutLock) {
+    focusTileAudio(id, tile);
     return;
   }
   const ox = e.clientX - br.left - tile.offsetLeft;
@@ -2828,13 +2998,32 @@ root.addEventListener("change", async (e) => {
   }
 });
 root.addEventListener("keydown", (e) => {
-  if (e.key === "Escape" && $("#evpop")) { closeEventPop(); return; }
   const q = e.target.closest("[data-act=ev-q]");
   if (q && e.key === "Enter") { S.q = q.value.trim(); render(); }
 });
 
+document.addEventListener("keydown", (e) => {
+  if (e.key !== "Escape" && e.key !== "Esc") return;
+  if ($("#evpop")) {
+    e.preventDefault();
+    closeEventPop();
+  }
+});
+
+document.addEventListener("visibilitychange", () => {
+  if (document.hidden) {
+    S._hiddenAt = Date.now();
+    return;
+  }
+  recoverMosaicLive();
+});
+window.addEventListener("focus", () => {
+  if (!document.hidden) recoverMosaicLive();
+});
+window.addEventListener("pageshow", () => recoverMosaicLive());
+
 if (new URLSearchParams(location.search).has("demo")) enterDemo();
 window.addEventListener("hashchange", () => render());
 render().catch((e) => {
-  root.innerHTML = `<div class="gate"><div class="gate-card"><p class="err">${esc(e.message)}</p></div></div>`;
+  frame().innerHTML = `<div class="gate"><div class="gate-card"><p class="err">${esc(e.message)}</p></div></div>`;
 });
