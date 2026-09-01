@@ -2460,9 +2460,9 @@ async function renderEvents() {
   frame().innerHTML = eventsPage();
   await hydrate(root);
   bindEventOverlay();
-  const frame = $("#ev-frame");
+  const evFrame = $("#ev-frame");
   const st = zoomMap.get("ev");
-  if (frame && st) viewZoom(frame, st);
+  if (evFrame && st) viewZoom(evFrame, st);
 }
 async function renderReplay() {
   if (!S.replayCam && S.cameras[0]) S.replayCam = camId(S.cameras[0]);

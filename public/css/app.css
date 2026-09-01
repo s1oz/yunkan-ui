@@ -232,10 +232,10 @@ a { color: var(--accent-2); text-decoration: none; }
 .stage.wide, .stage.fill { max-width: none; padding: 0; height: calc(100vh - var(--bar)); min-height: 0; }
 #home-keep {
   position: fixed; left: 0; right: 0; top: var(--bar); bottom: 0;
-  visibility: hidden; pointer-events: none; z-index: 2;
+  visibility: hidden; pointer-events: none; z-index: -1;
 }
 #home-keep .protect { height: 100%; }
-body.yk-home #home-keep { visibility: visible; pointer-events: auto; }
+body.yk-home #home-keep { visibility: visible; pointer-events: auto; z-index: 2; }
 body.yk-home .stage.fill { visibility: hidden; pointer-events: none; }
 .page-kicker { color: var(--muted); font-size: 11px; letter-spacing: .12em; text-transform: uppercase; margin: 0 0 4px; }
 .page-title { font-size: 20px; margin: 0 0 8px; letter-spacing: -.02em; font-weight: 650; }
