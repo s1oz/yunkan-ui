@@ -202,7 +202,7 @@ function loadLivePrefs() {
   try { S.livePrefs = JSON.parse(localStorage.getItem(LIVE_KEY) || "{}") || {}; }
   catch { S.livePrefs = {}; }
   if (!S.livePrefs.cams) S.livePrefs.cams = {};
-  if (S.livePrefs.source !== "main") S.livePrefs.source = S.livePrefs.source || "sub";
+  if (S.livePrefs.source !== "sub") S.livePrefs.source = "main";
   if (typeof S.livePrefs.muted !== "boolean") S.livePrefs.muted = true;
   if (Object.prototype.hasOwnProperty.call(S.livePrefs, "audioId")) {
     S.liveAudioId = S.livePrefs.audioId || null;
@@ -227,9 +227,11 @@ function ensureDefaultLiveAudio() {
 function livePref(id) {
   const g = S.livePrefs || {};
   const p = (g.cams && g.cams[id]) || {};
+  const userSub = p.userSource === true && p.source === "sub";
   return {
-    source: p.source === "main" ? "main" : "sub",
+    source: userSub ? "sub" : "main",
     muted: typeof p.muted === "boolean" ? p.muted : (typeof g.muted === "boolean" ? g.muted : true),
+    userSource: p.userSource === true,
   };
 }
 function setLivePref(id, patch) {
@@ -493,7 +495,7 @@ function streamHls(grant, streamObj) {
   return token ? `${path}?token=${encodeURIComponent(token)}` : path;
 }
 
-function hlsFromGrant(grant, source = "sub") {
+function hlsFromGrant(grant, source = "main") {
   if (!grant) return "";
   const live = pickStream(grant, source) || {};
   return streamHls(grant, live) || grant.hls_url || grant.url || "";
@@ -533,7 +535,7 @@ async function ensureGrant(id, force = false) {
 
 async function grantLive(id, source) {
   const g = await ensureGrant(id);
-  return hlsFromGrant(g, source || livePref(id).source || "sub");
+  return hlsFromGrant(g, source || livePref(id).source || "main");
 }
 
 function prefetchGrants() {
@@ -607,7 +609,7 @@ function attachHls(video, url, key, muted = true, extra = {}) {
       if (d?.fatal) { try { hls.destroy(); } catch {} failOnce(); }
     });
     setTimeout(() => { if (!shown) failOnce(); }, needVideo ? 8000 : 6000);
-    players.set(key, { hls, video, url, live: !behind });
+    players.set(key, { hls, video, url, live: !behind, source: extra.source || "" });
     return true;
   }
   if (video.canPlayType("application/vnd.apple.mpegurl")) {
@@ -619,7 +621,7 @@ function attachHls(video, url, key, muted = true, extra = {}) {
     }, { once: true });
     video.addEventListener("error", onFail, { once: true });
     setTimeout(() => { if (needVideo && video.videoWidth <= 0) onFail(); }, 8000);
-    players.set(key, { hls: null, video, url, live: !behind });
+    players.set(key, { hls: null, video, url, live: !behind, source: extra.source || "" });
     return true;
   }
   return false;
@@ -1157,6 +1159,11 @@ async function recoverMosaicLive(forceRestart = false) {
       if (!id) continue;
       const p = players.get("tile-" + id);
       if (!restart && p && isTilePlaying(tile)) {
+        const want = livePref(id).source;
+        if (p.source && p.source !== want && p.source !== "sub-ephemeral") {
+          await applyTileLive(id, tile);
+          continue;
+        }
         catchUpLive(p);
         applyTileSound(id, tile, tileWantsSound(id));
         continue;
@@ -1201,6 +1208,7 @@ async function applyTileLive(id, tile) {
     video.muted = true;
     video.volume = 1;
     attachHls(video, url, "tile-" + id, true, {
+      source: pref.source,
       onPlay: () => {
         video.hidden = false;
         video.classList.add("is-live");
@@ -1213,10 +1221,20 @@ async function applyTileLive(id, tile) {
         showTileSnap(tile);
         stopPlayer("aac-" + id);
         if (pref.source === "main") {
-          setLivePref(id, { source: "sub" });
-          if (srcBtn) srcBtn.textContent = "子码流";
-          toast("主码流无法播放，已回退子码流", "bad");
-          applyTileLive(id, tile);
+          if (srcBtn) srcBtn.textContent = "主码流";
+          const subUrl = hlsFromGrant(S.grants && S.grants[id], "sub");
+          if (subUrl && subUrl !== url) {
+            attachHls(video, subUrl, "tile-" + id, true, {
+              source: "sub-ephemeral",
+              onPlay: () => {
+                video.hidden = false;
+                video.classList.add("is-live");
+                if (img) img.style.opacity = "0";
+                applyTileSound(id, tile, tileWantsSound(id));
+              },
+              onFail: () => showTileSnap(tile),
+            });
+          }
         }
       },
     });
@@ -1449,27 +1467,33 @@ function eventsPage() {
     </div>`, true);
 }
 
-function trackPoints(tr) {
+function isBirdLabel(ev, tr) {
+  const t = String(ev?.type || ev?.event_type || ev?.label || tr?.label || ev?.extra?.detections?.[0]?.label || "").toLowerCase();
+  return t === "bird";
+}
+
+function trackPoints(tr, ev) {
   const raw = tr?.points || tr?.path || tr?.polyline || tr?.samples || tr?.track || [];
-  const fw = Number(tr?.frame_w || tr?.width || 0);
-  const fh = Number(tr?.frame_h || tr?.height || 0);
+  const fw = Number(tr?.frame_w || tr?.width || ev?.extra?.frame_w || 0);
+  const fh = Number(tr?.frame_h || tr?.height || ev?.extra?.frame_h || 0);
+  const bird = isBirdLabel(ev, tr);
   return raw.map((p) => {
     let x, y;
-    if (Array.isArray(p)) {
-      if (p.length >= 5 && Number.isFinite(+p[1]) && Number.isFinite(+p[4])) {
-        x = (+p[1] + +p[3]) / 2;
-        y = (+p[2] + +p[4]) / 2;
-      } else if (p.length >= 3) { x = +p[1]; y = +p[2]; }
-      else { x = +p[0]; y = +p[1]; }
+    if (Array.isArray(p) && p.length >= 5 && Number.isFinite(+p[1]) && Number.isFinite(+p[4])) {
+      x = (+p[1] + +p[3]) / 2;
+      y = bird ? (+p[2] + +p[4]) / 2 : +p[4];
+    } else if (Array.isArray(p) && p.length >= 3) { x = +p[1]; y = +p[2]; }
+    else if (Array.isArray(p)) { x = +p[0]; y = +p[1]; }
+    else if (p && p.x1 != null && p.x2 != null) {
+      x = (+p.x1 + +p.x2) / 2;
+      y = bird ? (+p.y1 + +p.y2) / 2 : +p.y2;
     } else {
       x = +(p.x ?? p.cx ?? p.nx ?? 0);
-      y = +(p.y ?? p.cy ?? p.ny ?? 0);
+      y = +(p.y ?? p.cy ?? p.ny ?? p.y2 ?? 0);
     }
-    if (x > 1.2 || y > 1.2) {
-      const dw = fw > 1 ? fw : 1;
-      const dh = fh > 1 ? fh : dw;
-      x /= dw;
-      y /= dh;
+    if (fw > 1 && fh > 1 && (x > 1.2 || y > 1.2)) {
+      x /= fw;
+      y /= fh;
     }
     return { x: Math.min(1, Math.max(0, x)), y: Math.min(1, Math.max(0, y)) };
   }).filter((p) => Number.isFinite(p.x) && Number.isFinite(p.y));
@@ -1493,11 +1517,16 @@ function containRect(img, wrap) {
   if (!img || !wrap) return null;
   const iw = img.naturalWidth || 0;
   const ih = img.naturalHeight || 0;
+  if (!iw || !ih) return null;
   const W = wrap.clientWidth, H = wrap.clientHeight;
-  if (!iw || !ih || !W || !H) return null;
-  const scale = Math.min(W / iw, H / ih);
+  if (!W || !H) return null;
+  const elW = img.offsetWidth || W;
+  const elH = img.offsetHeight || H;
+  const elX = img.offsetLeft || 0;
+  const elY = img.offsetTop || 0;
+  const scale = Math.min(elW / iw, elH / ih);
   const dw = iw * scale, dh = ih * scale;
-  return { ox: (W - dw) / 2, oy: (H - dh) / 2, dw, dh, iw, ih };
+  return { ox: elX + (elW - dw) / 2, oy: elY + (elH - dh) / 2, dw, dh, iw, ih };
 }
 
 function paintOverlay(wrap, img, cv, ev, track) {
@@ -1513,12 +1542,12 @@ function paintOverlay(wrap, img, cv, ev, track) {
   ctx.beginPath();
   ctx.rect(box.ox, box.oy, box.dw, box.dh);
   ctx.clip();
-  const fw = Number(track?.frame_w || 0);
-  const fh = Number(track?.frame_h || 0);
+  const fw = Number(track?.frame_w || ev?.extra?.frame_w || 0);
+  const fh = Number(track?.frame_h || ev?.extra?.frame_h || 0);
   const nx = (v) => (v > 1.2 ? v / (fw > 1 ? fw : box.iw || 1) : v);
   const ny = (v) => (v > 1.2 ? v / (fh > 1 ? fh : box.ih || 1) : v);
   if (S.showTrack && track) {
-    const pts = trackPoints(track).map((p) => ({
+    const pts = trackPoints(track, ev).map((p) => ({
       x: box.ox + p.x * box.dw,
       y: box.oy + p.y * box.dh,
     }));
@@ -1562,8 +1591,10 @@ function paintOverlay(wrap, img, cv, ev, track) {
 async function loadEventTrack(ev) {
   S.eventTrack = null;
   if (!ev?.id || !feat("events", "tracks")) return;
-  try { S.eventTrack = await api.get(`/api/events/${ev.id}/track`); }
-  catch { S.eventTrack = null; }
+  try {
+    const d = await api.get(`/api/events/${ev.id}/track`);
+    S.eventTrack = d?.points ? d : (d?.track || d);
+  } catch { S.eventTrack = null; }
 }
 
 function bindEventOverlay(rootEl = document) {
@@ -2724,7 +2755,7 @@ root.addEventListener("click", async (e) => {
       const id = el.dataset.id;
       const tile = el.closest(".mtile");
       const next = livePref(id).source === "main" ? "sub" : "main";
-      setLivePref(id, { source: next });
+      setLivePref(id, { source: next, userSource: true });
       el.textContent = next === "main" ? "主码流" : "子码流";
       stopTilePlayers(id);
       const ok = await applyTileLive(id, tile);
