@@ -5,6 +5,7 @@
 **An alternative web workbench for [YunKan](https://github.com/mrtian2016/yunkan) — mosaic live view, AI events, and timeline playback. OpenVINO on the box, one page in the browser.**
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+[![Docker Pulls](https://img.shields.io/docker/pulls/s1oz/yunkan-ui.svg)](https://hub.docker.com/r/s1oz/yunkan-ui)
 [![Unofficial](https://img.shields.io/badge/YunKan-unofficial-lightgrey.svg)](https://github.com/mrtian2016/yunkan)
 
 [简体中文](./README.zh-CN.md) · Official product: [mrtian2016/yunkan](https://github.com/mrtian2016/yunkan) · [yun-kan.com](https://yun-kan.com/en)
@@ -98,43 +99,79 @@ Copy [`.env.example`](./.env.example) to `.env` if you want to override them.
 
 ## Docker
 
-Does not replace the official YunKan container. Sidecar only.
+Does not replace the official YunKan container. Sidecar only. Image: **[s1oz/yunkan-ui](https://hub.docker.com/r/s1oz/yunkan-ui)** (also `ghcr.io/s1oz/yunkan-ui`).
+
+### Pull and run (same machine as YunKan)
 
 ```bash
-git clone https://github.com/s1oz/yunkan-ui.git
-cd yunkan-ui
-docker compose up -d --build
-```
-
-Open `http://<host>:18081/`. Compose uses **host** networking so `127.0.0.1:23326` / `:23406` reach a YunKan instance on the same machine.
-
-Equivalent `docker run`:
-
-```bash
-docker build -t yunkan-ui:local .
+docker pull s1oz/yunkan-ui:latest
 docker run -d --name YunKan-UI --network host --restart unless-stopped \
   -e YUNKAN_API=http://127.0.0.1:23326 \
   -e YUNKAN_MEDIA=http://127.0.0.1:23406 \
   -e PORT=18081 \
-  yunkan-ui:local
+  s1oz/yunkan-ui:latest
 ```
 
-If YunKan is on another host, set `YUNKAN_API` / `YUNKAN_MEDIA` to that address. On bridge networking, publish `18081:18081` and do **not** use `127.0.0.1` (that is the UI container itself).
+Open `http://<host>:18081/`. **Host** networking is required so `127.0.0.1:23326` / `:23406` reach YunKan on the same box.
+
+### Compose (build or pull)
+
+```bash
+git clone https://github.com/s1oz/yunkan-ui.git
+cd yunkan-ui
+docker compose up -d
+```
+
+`docker compose up -d --build` rebuilds from this repo instead of pulling.
+
+### YunKan on another host
+
+```bash
+docker run -d --name YunKan-UI -p 18081:18081 --restart unless-stopped \
+  -e YUNKAN_API=http://192.168.1.10:23326 \
+  -e YUNKAN_MEDIA=http://192.168.1.10:23406 \
+  s1oz/yunkan-ui:latest
+```
+
+On bridge networking do **not** use `127.0.0.1` for `YUNKAN_*` (that is the UI container itself).
+
+### Build locally
+
+```bash
+docker build -t s1oz/yunkan-ui:latest .
+```
+
+Publish (maintainers): `docker push s1oz/yunkan-ui:latest` and `docker push ghcr.io/s1oz/yunkan-ui:latest`.
+
+### Auto-build to Docker Hub (GitHub Actions)
+
+The workflow [`.github/workflows/docker.yml`](./.github/workflows/docker.yml) builds on every push to `main` (and on tags `v*`) and pushes `s1oz/yunkan-ui` plus `ghcr.io/s1oz/yunkan-ui`. It also updates the Docker Hub **short description** and full README.
+
+One-time setup on GitHub:
+
+1. Docker Hub → **Account Settings** → **Personal access tokens** → **Generate**. Enable **Read, Write, Delete**. Copy the token.
+2. GitHub repo **s1oz/yunkan-ui** → **Settings** → **Secrets and variables** → **Actions** → **New repository secret**:
+   - Name: `DOCKERHUB_TOKEN`
+   - Value: the token from step 1
+3. Push to `main` (or **Actions** → **docker** → **Run workflow**).
+4. First GHCR image: GitHub → **Packages** → `yunkan-ui` → Package settings → make it **public** if you want anonymous pulls.
+
+Hub’s own “Automated Builds” (link GitHub under Hub → Builds) is optional. GitHub Actions is enough; do not enable both or you get double builds.
 
 ## Unraid
 
 1. YunKan is already running (Community Apps: **YunKan-OpenVINO** / CUDA / CPU). Leave it alone.
-2. Clone this repo, then compose up:
+2. Add container, image `s1oz/yunkan-ui:latest`, network **host**, env `YUNKAN_API=http://127.0.0.1:23326`, `YUNKAN_MEDIA=http://127.0.0.1:23406`, `PORT=18081`. Or clone and compose:
 
 ```bash
 git clone https://github.com/s1oz/yunkan-ui.git /mnt/user/appdata/yunkan-ui
 cd /mnt/user/appdata/yunkan-ui
-docker compose up -d --build
+docker compose up -d
 ```
 
 3. Docker tab → **YunKan-UI**. Globe opens `http://[IP]:18081/`. Icon is [unraid-icon.png](./unraid-icon.png).
 
-Optional: copy [`templates/unraid.xml`](./templates/unraid.xml) to `/boot/config/plugins/dockerMan/templates-user/my-YunKan-UI.xml` so **Add Container** can load the template. The image tag is `yunkan-ui:local` — build it first (`docker compose build` or `docker build -t yunkan-ui:local .`). Do not run compose **and** the template as two containers.
+Optional: copy [`templates/unraid.xml`](./templates/unraid.xml) to `/boot/config/plugins/dockerMan/templates-user/my-YunKan-UI.xml`. Do not run compose **and** the template as two containers.
 
 ## Jump to official settings
 
@@ -155,6 +192,8 @@ serve.py             static files + same-origin proxy
 start.sh / start.bat Unix / Windows helper
 Dockerfile           python:3.12-alpine sidecar
 docker-compose.yml   host-network compose (Unraid Compose Manager)
+.github/workflows    build + push s1oz/yunkan-ui to Docker Hub and GHCR
+docs/dockerhub.md    Docker Hub full description (absolute screenshot URLs)
 templates/unraid.xml Unraid Docker template
 unraid-icon.png      Unraid Docker tab icon
 docs/screenshots     README images (demo data)

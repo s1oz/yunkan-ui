@@ -1,0 +1,59 @@
+name: docker
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  workflow_dispatch:
+
+jobs:
+  image:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - name: Docker Hub login
+        if: github.event_name != 'pull_request'
+        continue-on-error: true
+        uses: docker/login-action@v3
+        with:
+          username: s1oz
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+      - name: GHCR login
+        if: github.event_name != 'pull_request'
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - uses: docker/metadata-action@v5
+        id: meta
+        with:
+          images: |
+            s1oz/yunkan-ui
+            ghcr.io/s1oz/yunkan-ui
+          tags: |
+            type=raw,value=latest,enable={{is_default_branch}}
+            type=ref,event=tag
+            type=sha,prefix=
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+      - name: Docker Hub description
+        if: github.event_name != 'pull_request'
+        continue-on-error: true
+        uses: peter-evans/dockerhub-description@v4
+        with:
+          username: s1oz
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+          repository: s1oz/yunkan-ui
+          short-description: Unofficial YunKan web workbench. 云瞰非官方工作台：直播拼贴、AI 事件、时间轴回放。
+          readme-filepath: ./docs/dockerhub.md

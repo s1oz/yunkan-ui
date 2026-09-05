@@ -9,6 +9,10 @@ import {
   loadAddons, saveAddons, applyPreset, isOn, enabledNav,
   moduleById, countEnabled, FIRST_KEY,
 } from "./modules.js";
+import {
+  players, stopPlayer, stopAllPlayers, playMedia, attachHls, catchUpLive,
+  applyMediaVolume, setMediaVolumeGetter, mediaVolume,
+} from "./media.js";
 
 installMock(api);
 
@@ -39,6 +43,7 @@ const I = {
   panel: `<svg width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.7"><rect x="2" y="3" width="11" height="10" rx="1.5"/><path d="M9.5 3v10"/></svg>`,
   lock: `<svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.7"><rect x="3" y="7" width="8" height="6" rx="1"/><path d="M5 7V5.2a2 2 0 0 1 4 0V7"/></svg>`,
   unlock: `<svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.7"><rect x="3" y="7" width="8" height="6" rx="1"/><path d="M5 7V5.2a2 2 0 0 1 3.7-.9"/></svg>`,
+  vol: `<svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M2.5 6.2h2.2L8 3.8v8.4L4.7 9.8H2.5z"/><path d="M10 5.5a2.4 2.4 0 0 1 0 5"/></svg>`,
 };
 const ICONS = { cam: I.cam, bolt: I.bolt, clock: I.clock, user: I.user, chip: I.chip, plug: I.plug, gear: I.gear, grid: I.grid, home: I.home };
 
@@ -111,8 +116,8 @@ const blobs = new Set();
 function blobUrl(b) { const u = URL.createObjectURL(b); blobs.add(u); return u; }
 function wipeBlobs() {
   const keep = new Set();
-  $$("#home-keep img").forEach((img) => {
-    if (img.src && img.src.startsWith("blob:")) keep.add(img.src);
+  $$("img").forEach((img) => {
+    if (img.isConnected && img.src && img.src.startsWith("blob:")) keep.add(img.src);
   });
   for (const u of [...blobs]) {
     if (keep.has(u)) continue;
@@ -121,17 +126,6 @@ function wipeBlobs() {
   }
 }
 
-const players = new Map();
-function stopPlayer(key) {
-  const p = players.get(key);
-  if (!p) return;
-  try { p.hls?.destroy(); } catch {}
-  try { p.video.pause(); p.video.removeAttribute("src"); p.video.load(); } catch {}
-  players.delete(key);
-}
-function stopAllPlayers() {
-  for (const key of [...players.keys()]) stopPlayer(key);
-}
 function mosaicAlive() {
   return !!$("#home-keep .mtile");
 }
@@ -142,7 +136,7 @@ function stopPagePlayers() {
   }
 }
 function discardMosaic() {
-  document.body.classList.remove("yk-home");
+  document.body.classList.remove("yk-home", "tile-fs");
   const keep = $("#home-keep");
   if (keep) keep.innerHTML = "";
   S._mosaicKey = "";
@@ -204,9 +198,25 @@ function loadLivePrefs() {
   if (!S.livePrefs.cams) S.livePrefs.cams = {};
   if (S.livePrefs.source !== "sub") S.livePrefs.source = "main";
   if (typeof S.livePrefs.muted !== "boolean") S.livePrefs.muted = true;
+  const vol = Number(S.livePrefs.volume);
+  S.livePrefs.volume = Number.isFinite(vol) ? Math.max(0, Math.min(1, vol)) : 1;
   if (Object.prototype.hasOwnProperty.call(S.livePrefs, "audioId")) {
     S.liveAudioId = S.livePrefs.audioId || null;
   }
+}
+function liveVolume() {
+  const v = Number(S.livePrefs && S.livePrefs.volume);
+  return Number.isFinite(v) ? Math.max(0, Math.min(1, v)) : 1;
+}
+function setLiveVolume(v) {
+  const n = Math.max(0, Math.min(1, Number(v)));
+  S.livePrefs.volume = Number.isFinite(n) ? n : 1;
+  localStorage.setItem(LIVE_KEY, JSON.stringify(S.livePrefs));
+  applyMediaVolume();
+}
+function volHtml(extraClass = "") {
+  const n = Math.round(liveVolume() * 100);
+  return `<label class="vol-ctl ${extraClass}" title="音量 ${n}%">${I.vol}<input type="range" min="0" max="100" step="1" value="${n}" data-act="vol" aria-label="音量" /></label>`;
 }
 function defaultAudioCamId() {
   const cams = S.cameras || [];
@@ -244,6 +254,7 @@ function setLivePref(id, patch) {
 
 try { S.mosaicLayout = JSON.parse(localStorage.getItem(LAYOUT_KEY) || "null"); } catch { S.mosaicLayout = null; }
 loadLivePrefs();
+setMediaVolumeGetter(liveVolume);
 applyTheme();
 matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => { if (S.theme === "system") applyTheme(); });
 
@@ -276,18 +287,36 @@ async function loadCameras() {
   S.cameras = asList(await api.get("/api/cameras"), ["cameras"]);
   if (!S.selected && S.cameras[0]) S.selected = camId(S.cameras[0]);
 }
-async function loadUnread() {
+async function loadUnread(force = false) {
+  if (!force && S._unreadAt && Date.now() - S._unreadAt < 8000) return S.unread;
   try {
     const d = await api.get("/api/events/unread-count");
     S.unread = Number(d?.count ?? d?.unread ?? d ?? 0);
   } catch { S.unread = 0; }
+  S._unreadAt = Date.now();
+  return S.unread;
 }
 async function loadAlerts() {
   try {
-    const sc = await api.get("/api/system/self-check");
+    const sc = S.pack.selfCheck || await api.get("/api/system/self-check");
+    S.pack.selfCheck = sc;
     S.alerts = asList(sc, ["findings", "issues", "alerts"]);
     if (!S.alerts.length && Array.isArray(sc?.findings)) S.alerts = sc.findings;
   } catch { S.alerts = []; }
+}
+
+async function loadShellPack(force = false) {
+  if (!force && S._packAt && Date.now() - S._packAt < 15000) return;
+  const [metrics, space, status, selfCheck] = await Promise.all([
+    api.get("/api/system/metrics").catch(() => S.pack.metrics),
+    api.get("/api/storage/space").catch(() => S.pack.space),
+    api.get("/api/system/status").catch(() => S.pack.status),
+    api.get("/api/system/self-check").catch(() => S.pack.selfCheck),
+  ]);
+  S.pack = { ...S.pack, metrics, space, status, selfCheck };
+  S._packAt = Date.now();
+  S.alerts = asList(selfCheck, ["findings", "issues", "alerts"]);
+  if (!S.alerts.length && Array.isArray(selfCheck?.findings)) S.alerts = selfCheck.findings;
 }
 
 const FINDING_WHY = {
@@ -368,17 +397,19 @@ async function hydrateEventExtras(list) {
   return list;
 }
 
-async function loadRecentEvents() {
+async function loadRecentEvents(force = false) {
+  if (!force && S.recent.length && Date.now() - (S._recentAt || 0) < 10000) return S.recent;
   let list = [];
   try { list = eventList(await api.get("/api/events/recent", { limit: 80 })); } catch {}
   if (!list.length) {
     try { list = eventList(await api.get("/api/events", { limit: 80 })); } catch {}
-  } else {
+  } else if (list.some(extraLooksEmpty)) {
     try { mergeEventExtras(list, eventList(await api.get("/api/events", { limit: 80 }))); } catch {}
   }
   await loadTripwires();
   if (list.some(extraLooksEmpty)) await hydrateEventExtras(list);
   S.recent = list.sort((a, b) => toMs(b.event_time) - toMs(a.event_time));
+  S._recentAt = Date.now();
   return S.recent;
 }
 
@@ -454,15 +485,48 @@ function metricLabel(n) {
 async function fillAuthImg(img) {
   const src = img.dataset.src;
   if (!src) return;
+  if (img.dataset.hydrated === src && (img.currentSrc || img.src)) return;
+  if (img._fillP) return img._fillP;
   const tile = img.closest(".mtile");
   if (tile && isTilePlaying(tile)) return;
-  try {
-    const r = await api.blob(src);
-    if (r) img.src = blobUrl(r.blob);
-  } catch { img.style.opacity = ".4"; }
+  img._fillP = (async () => {
+    try {
+      const r = await api.blob(src);
+      if (!r?.blob || !img.isConnected) return;
+      img.src = blobUrl(r.blob);
+      img.dataset.hydrated = src;
+      if (img.closest(".ev-frame, .zview, .evpop")) {
+        try { await img.decode(); } catch {}
+      }
+    } catch { img.style.opacity = ".4"; }
+  })();
+  return img._fillP;
+}
+let lazyImgIo = null;
+function observeLazyImg(img) {
+  if (!img || img._lazyOn) return;
+  if (img.closest("#home-keep") && !document.body.classList.contains("yk-home")) return;
+  if (!lazyImgIo) {
+    lazyImgIo = new IntersectionObserver((entries) => {
+      for (const en of entries) {
+        if (!en.isIntersecting) continue;
+        lazyImgIo.unobserve(en.target);
+        en.target._lazyOn = false;
+        if (en.target.isConnected) fillAuthImg(en.target);
+      }
+    }, { rootMargin: "200px" });
+  }
+  img._lazyOn = true;
+  lazyImgIo.observe(img);
 }
 async function hydrate(rootEl) {
-  await Promise.all($$("img[data-src]", rootEl).map(fillAuthImg));
+  const imgs = $$("img[data-src]", rootEl);
+  const eager = [];
+  for (const img of imgs) {
+    if (img.closest(".rail-list")) observeLazyImg(img);
+    else eager.push(img);
+  }
+  await Promise.all(eager.map(fillAuthImg));
 }
 
 function bindClock() {
@@ -545,86 +609,6 @@ function prefetchGrants() {
     if (S.grants && grantFresh(S.grants[id])) continue;
     ensureGrant(id).catch(() => {});
   }
-}
-
-function playMedia(el, wantSound) {
-  if (!el) return;
-  el.volume = 1;
-  el.muted = !wantSound;
-  const p = el.play();
-  if (!p || !wantSound) {
-    if (p && p.catch) p.catch(() => {});
-    return;
-  }
-  p.catch(() => {
-    el.muted = true;
-    el.play().catch(() => {});
-    const unmute = () => {
-      el.muted = false;
-      el.play().then(() => window.removeEventListener("pointerdown", unmute)).catch(() => {
-        el.muted = true;
-        el.play().catch(() => {});
-      });
-    };
-    window.addEventListener("pointerdown", unmute, { once: true });
-  });
-}
-
-function attachHls(video, url, key, muted = true, extra = {}) {
-  stopPlayer(key);
-  if (!url || !video) return false;
-  video.muted = muted;
-  video.autoplay = true;
-  video.playsInline = true;
-  video.setAttribute("playsinline", "");
-  video.setAttribute("autoplay", "");
-  video.volume = 1;
-  const behind = Number(extra.secondsBehind || 0);
-  const onPlay = extra.onPlay || (() => {});
-  const onFail = extra.onFail || (() => {});
-  const needVideo = extra.needVideo !== false;
-  if (window.Hls && window.Hls.isSupported()) {
-    const hls = new window.Hls({
-      enableWorker: true,
-      lowLatencyMode: !behind,
-      liveSyncDuration: behind ? Math.max(1, behind) : 2,
-      liveMaxLatencyDuration: behind ? undefined : 8,
-      maxLiveSyncPlaybackRate: behind ? 1 : 1.8,
-    });
-    hls.loadSource(url);
-    hls.attachMedia(video);
-    let shown = false;
-    const failOnce = () => { if (!shown) { shown = true; onFail(); } };
-    const okOnce = () => { if (!shown) { shown = true; onPlay(); } };
-    hls.on(window.Hls.Events.MANIFEST_PARSED, () => { playMedia(video, !muted); });
-    video.addEventListener("playing", () => {
-      if (!needVideo) { okOnce(); return; }
-      setTimeout(() => {
-        if (video.videoWidth > 0 && video.readyState >= 2 && !video.paused) okOnce();
-        else failOnce();
-      }, 400);
-    }, { once: true });
-    video.addEventListener("error", failOnce);
-    hls.on(window.Hls.Events.ERROR, (_, d) => {
-      if (d?.fatal) { try { hls.destroy(); } catch {} failOnce(); }
-    });
-    setTimeout(() => { if (!shown) failOnce(); }, needVideo ? 8000 : 6000);
-    players.set(key, { hls, video, url, live: !behind, source: extra.source || "" });
-    return true;
-  }
-  if (video.canPlayType("application/vnd.apple.mpegurl")) {
-    video.src = url;
-    playMedia(video, !muted);
-    video.addEventListener("playing", () => {
-      if (!needVideo || video.videoWidth > 0) { video.hidden = needVideo ? false : video.hidden; onPlay(); }
-      else onFail();
-    }, { once: true });
-    video.addEventListener("error", onFail, { once: true });
-    setTimeout(() => { if (needVideo && video.videoWidth <= 0) onFail(); }, 8000);
-    players.set(key, { hls: null, video, url, live: !behind, source: extra.source || "" });
-    return true;
-  }
-  return false;
 }
 
 function gateView(kind, extra = {}) {
@@ -816,6 +800,7 @@ function chrome(inner, wide = false) {
           ${S.unread ? `<span class="count">${S.unread > 99 ? "99+" : S.unread}</span>` : ""}
         </button>` : ""}
       <div class="who">
+        ${volHtml()}
         <button class="btn icon ghost" data-act="orig-settings" title="跳转原生系统设置" aria-label="跳转原生系统设置">${I.gear}</button>
         <button class="btn icon ghost" data-act="toggle-theme" title="${themeIsDay() ? "切换到黑夜模式" : "切换到白天模式"}">${themeIsDay() ? I.moon : I.sun}</button>
         ${api.demo ? `<span class="pill accent">预览</span>` : ""}
@@ -942,27 +927,9 @@ function panViewPointer(el, key, e) {
   return true;
 }
 
-function catchUpLive(p) {
-  if (!p || !p.live || !p.video) return false;
-  const video = p.video;
-  try {
-    if (video.paused) video.play().catch(() => {});
-    let target = null;
-    if (p.hls && p.hls.liveSyncPosition != null && Number.isFinite(p.hls.liveSyncPosition)) {
-      target = p.hls.liveSyncPosition;
-    } else if (video.buffered && video.buffered.length) {
-      target = video.buffered.end(video.buffered.length - 1) - 1.2;
-    }
-    if (target != null && Number.isFinite(target) && target - video.currentTime > 2.5) {
-      video.currentTime = Math.max(0, target);
-      return true;
-    }
-  } catch {}
-  return false;
-}
-
 function persistMosaic() {
   if (S.layoutLock) return;
+  if ($(".mtile.is-fs")) return;
   const box = $("#mosaic");
   if (!box) return;
   const W = box.clientWidth, H = box.clientHeight;
@@ -995,8 +962,10 @@ function layoutMosaic() {
     }).filter(Boolean);
     if (tiles.length < S.cameras.length) tiles = packMosaic(S.cameras, W, H, 2);
   } else tiles = packMosaic(S.cameras, W, H, 2);
+  const byId = new Map(tiles.map((t) => [String(t.id), t]));
   $$(".mtile", box).forEach((el) => {
-    const t = tiles.find((x) => x.id === el.dataset.id);
+    if (el.classList.contains("is-fs")) return;
+    const t = byId.get(String(el.dataset.id));
     if (!t) return;
     el.style.left = ((t.x / W) * 100) + "%";
     el.style.top = ((t.y / H) * 100) + "%";
@@ -1028,12 +997,13 @@ function bindMosaic(opts = {}) {
 }
 
 function startSnapRefresh() {
-  if (S._snapTimer) clearInterval(S._snapTimer);
+  if (S._snapTimer) return;
   const last = S._snapBlobs || (S._snapBlobs = {});
   const tick = () => {
-    if (document.hidden || !document.body.classList.contains("yk-home")) return;
-    $$(".mtile").forEach((tile) => {
-      if (isTilePlaying(tile)) return;
+    if (document.hidden || !document.body.classList.contains("yk-home") || document.body.classList.contains("tile-fs")) return;
+    const idle = $$(".mtile").filter((tile) => !isTilePlaying(tile));
+    if (!idle.length) return;
+    idle.forEach((tile) => {
       const img = $("img", tile);
       const id = tile.dataset.id;
       if (!img || !id) return;
@@ -1071,14 +1041,34 @@ function showTileSnap(tile) {
   if (img) img.style.opacity = "1";
 }
 
+function revealTileVideo(tile) {
+  const video = tileVideo(tile);
+  const img = $("img", tile);
+  if (video) {
+    video.hidden = false;
+    video.classList.add("is-live");
+  }
+  if (img) img.style.opacity = "0";
+}
+
+function mosaicSoundAllowed() {
+  return document.body.classList.contains("yk-home");
+}
+function parkMosaicAudio() {
+  $$("#home-keep video, #home-keep audio").forEach((el) => {
+    el.muted = true;
+    try { el.pause(); } catch {}
+  });
+}
 function applyTileSound(id, tile, wantSound) {
   const video = tileVideo(tile);
   const aac = tileAac(tile);
   const grant = S.grants && S.grants[id];
+  wantSound = !!(wantSound && mosaicSoundAllowed());
   const aacUrl = wantSound ? aacHlsFromGrant(grant) : "";
   const useSidecar = !!(wantSound && aacUrl);
   if (video) {
-    video.volume = 1;
+    video.volume = mediaVolume();
     video.muted = useSidecar ? true : !wantSound;
     if (wantSound && !useSidecar) playMedia(video, true);
     else if (!wantSound) video.muted = true;
@@ -1133,7 +1123,7 @@ async function startMosaicLive() {
 }
 
 function startLiveWatch() {
-  if (S._liveWatch) clearInterval(S._liveWatch);
+  if (S._liveWatch) return;
   S._liveWatch = setInterval(() => {
     if (document.hidden || !document.body.classList.contains("yk-home") || !$("#mosaic")) return;
     $$(".mtile").forEach((tile) => {
@@ -1158,7 +1148,7 @@ async function recoverMosaicLive(forceRestart = false) {
       const id = tile.dataset.id;
       if (!id) continue;
       const p = players.get("tile-" + id);
-      if (!restart && p && isTilePlaying(tile)) {
+      if (!restart && p && p.video && p.video.videoWidth > 0) {
         const want = livePref(id).source;
         if (p.source && p.source !== want && p.source !== "sub-ephemeral") {
           await applyTileLive(id, tile);
@@ -1188,7 +1178,6 @@ async function focusTileAudio(id, tile) {
 
 async function applyTileLive(id, tile) {
   const video = tileVideo(tile);
-  const img = $("img", tile);
   const pref = livePref(id);
   const srcBtn = $("[data-act=tile-src]", tile);
   const muteBtn = $("[data-act=tile-mute]", tile);
@@ -1206,15 +1195,14 @@ async function applyTileLive(id, tile) {
     if (!url) { showTileSnap(tile); toast("该路暂无直播流", "bad"); return false; }
     let failed = false;
     video.muted = true;
-    video.volume = 1;
+    video.volume = mediaVolume();
+    const onLive = () => {
+      revealTileVideo(tile);
+      applyTileSound(id, tile, tileWantsSound(id));
+    };
     attachHls(video, url, "tile-" + id, true, {
       source: pref.source,
-      onPlay: () => {
-        video.hidden = false;
-        video.classList.add("is-live");
-        if (img) img.style.opacity = "0";
-        applyTileSound(id, tile, tileWantsSound(id));
-      },
+      onPlay: onLive,
       onFail: () => {
         if (failed) return;
         failed = true;
@@ -1226,12 +1214,7 @@ async function applyTileLive(id, tile) {
           if (subUrl && subUrl !== url) {
             attachHls(video, subUrl, "tile-" + id, true, {
               source: "sub-ephemeral",
-              onPlay: () => {
-                video.hidden = false;
-                video.classList.add("is-live");
-                if (img) img.style.opacity = "0";
-                applyTileSound(id, tile, tileWantsSound(id));
-              },
+              onPlay: onLive,
               onFail: () => showTileSnap(tile),
             });
           }
@@ -1244,6 +1227,40 @@ async function applyTileLive(id, tile) {
     toast(ex.message || "直播失败", "bad");
     return false;
   }
+}
+
+function defaultZoomHint() {
+  return S.layoutLock ? "点击切声 · 滚轮放大 · 双击全屏" : "点击切声 · 拖动 · 滚轮放大 · 双击全屏";
+}
+function zoomHintText(tile) {
+  if (tile && tile.classList.contains("is-fs")) return "双击退出全屏";
+  const id = tile && tile.dataset.id;
+  const st = id ? zoomMap.get(id) : null;
+  if (st && st.s > 1.01) return `${st.s.toFixed(1)}x`;
+  return defaultZoomHint();
+}
+function refreshZoomHints() {
+  $$(".mtile .zoom-hint").forEach((h) => {
+    h.textContent = zoomHintText(h.closest(".mtile"));
+  });
+}
+function pageFsTile() {
+  return $(".mtile.is-fs");
+}
+function toggleTileFullscreen(tile) {
+  if (!tile) return;
+  const protect = tile.closest(".protect") || $(".protect");
+  const closing = tile.classList.contains("is-fs");
+  $$(".mtile.is-fs").forEach((el) => el.classList.remove("is-fs"));
+  protect?.classList.remove("tile-fs");
+  document.body.classList.remove("tile-fs");
+  if (!closing) {
+    tile.classList.add("is-fs");
+    protect?.classList.add("tile-fs");
+    document.body.classList.add("tile-fs");
+  }
+  refreshZoomHints();
+  if (closing) requestAnimationFrame(() => layoutMosaic());
 }
 
 function tileLayoutStyle(id) {
@@ -1387,8 +1404,9 @@ function homeMosaicHtml(recent) {
           <div class="tile-tools">
             <button data-act="tile-src" data-id="${esc(id)}">${pref.source === "main" ? "主码流" : "子码流"}</button>
             <button data-act="tile-mute" data-id="${esc(id)}">${sounding ? "有声" : "已静音"}</button>
+            ${volHtml("tile-vol")}
           </div>
-          <div class="zoom-hint">${S.layoutLock ? "点击切声 · 滚轮放大" : "点击切声 · 拖动 · 滚轮放大"}</div>
+          <div class="zoom-hint">${defaultZoomHint()}</div>
           <div class="cap"><i class="dot ${isOnline(c) ? "on" : "off"}"></i>${esc(camName(c))}
             ${c.detection_enabled ? `<span class="pill accent">AI</span>` : ""}
             <span class="snd-flag pill ready">有声</span></div>
@@ -1513,20 +1531,48 @@ function parseBbox(b) {
   return { x, y, w, h };
 }
 
-function containRect(img, wrap) {
+function fitMediaBox(W, H, iw, ih) {
+  if (!W || !H || !iw || !ih) return null;
+  const scale = Math.min(W / iw, H / ih);
+  let dw = Math.max(1, Math.round(iw * scale));
+  let dh = Math.max(1, Math.round(dw * ih / iw));
+  if (dh > H) {
+    dh = H;
+    dw = Math.max(1, Math.round(dh * iw / ih));
+  }
+  if (dw > W) {
+    dw = W;
+    dh = Math.max(1, Math.round(dw * ih / iw));
+  }
+  return { ox: Math.round((W - dw) / 2), oy: Math.round((H - dh) / 2), dw, dh, iw, ih };
+}
+
+function eventFrameSize(ev, img) {
+  const iw = (img && img.naturalWidth) || Number(ev?.extra?.frame_w || ev?.frame_w || S.eventTrack?.frame_w || 0);
+  const ih = (img && img.naturalHeight) || Number(ev?.extra?.frame_h || ev?.frame_h || S.eventTrack?.frame_h || 0);
+  if (iw > 0 && ih > 0) return { iw, ih };
+  return { iw: 16, ih: 9 };
+}
+
+function layoutEventImage(wrap, img, ev) {
   if (!img || !wrap) return null;
-  const iw = img.naturalWidth || 0;
-  const ih = img.naturalHeight || 0;
-  if (!iw || !ih) return null;
   const W = wrap.clientWidth, H = wrap.clientHeight;
   if (!W || !H) return null;
-  const elW = img.offsetWidth || W;
-  const elH = img.offsetHeight || H;
-  const elX = img.offsetLeft || 0;
-  const elY = img.offsetTop || 0;
-  const scale = Math.min(elW / iw, elH / ih);
-  const dw = iw * scale, dh = ih * scale;
-  return { ox: elX + (elW - dw) / 2, oy: elY + (elH - dh) / 2, dw, dh, iw, ih };
+  const { iw, ih } = eventFrameSize(ev, img);
+  const box = fitMediaBox(W, H, iw, ih);
+  if (!box) return null;
+  img.style.left = box.ox + "px";
+  img.style.top = box.oy + "px";
+  img.style.width = box.dw + "px";
+  img.style.height = box.dh + "px";
+  img.style.maxWidth = "none";
+  img.style.maxHeight = "none";
+  img.classList.add("is-fit");
+  return box;
+}
+
+function containRect(img, wrap, ev) {
+  return layoutEventImage(wrap, img, ev);
 }
 
 function paintOverlay(wrap, img, cv, ev, track) {
@@ -1536,7 +1582,7 @@ function paintOverlay(wrap, img, cv, ev, track) {
   cv.height = wrap.clientHeight;
   ctx.clearRect(0, 0, cv.width, cv.height);
   if (!img) return;
-  const box = containRect(img, wrap);
+  const box = containRect(img, wrap, ev);
   if (!box) return;
   ctx.save();
   ctx.beginPath();
@@ -1605,6 +1651,7 @@ function bindEventOverlay(rootEl = document) {
   const ev = S.eventPop || S.event;
   const draw = () => paintOverlay(wrap, img, cv, ev, S.eventTrack);
   if (img) {
+    layoutEventImage(wrap, img, ev);
     if (img.complete && img.naturalWidth) draw();
     img.addEventListener("load", draw);
   }
@@ -1655,36 +1702,61 @@ function setTlSpan(ms, center) {
   S.tlEnd = S.tlStart + span;
 }
 
+function filterReplayEvents() {
+  const evs = S.replayAllEvents || [];
+  S.replayEvents = evs.filter((e) => {
+    const t = toMs(e.event_time);
+    const camOk = !S.replayCam || String(e.camera_id) === String(S.replayCam);
+    return camOk && t >= S.tlStart && t <= S.tlEnd;
+  });
+}
+
+function panTlTo(ms, mode = "center") {
+  const span = Math.max(S.tlEnd - S.tlStart || 0, 3600000);
+  if (mode === "end") {
+    S.tlEnd = ms;
+    S.tlStart = ms - span;
+  } else {
+    S.tlStart = ms - span * 0.35;
+    S.tlEnd = S.tlStart + span;
+  }
+}
+
 async function loadReplayData() {
   ensureTlWindow();
   if (!S.replayCam && S.cameras[0]) S.replayCam = camId(S.cameras[0]);
   const startDate = fmtDay(S.tlStart);
   const endDate = fmtDay(S.tlEnd);
-  let data = null;
-  try {
-    data = await api.get(`/api/cameras/${encodeURIComponent(S.replayCam)}/timeline`, {
-      start_date: startDate, end_date: endDate,
-    });
-  } catch {
-    const segs = [];
-    for (const d of eachDay(S.tlStart, S.tlEnd)) {
-      try { segs.push(...asList(await api.get("/api/recordings/segments", { camera: S.replayCam, date: d }), ["segments"])); }
-      catch {}
+  const segKey = `${S.replayCam}|${startDate}|${endDate}`;
+  if (S._segCache && S._segCache.key === segKey) {
+    S.replaySegs = S._segCache.segs;
+  } else {
+    let data = null;
+    try {
+      data = await api.get(`/api/cameras/${encodeURIComponent(S.replayCam)}/timeline`, {
+        start_date: startDate, end_date: endDate,
+      });
+    } catch {
+      const segs = [];
+      for (const d of eachDay(S.tlStart, S.tlEnd)) {
+        try { segs.push(...asList(await api.get("/api/recordings/segments", { camera: S.replayCam, date: d }), ["segments"])); }
+        catch {}
+      }
+      data = { segments: segs };
     }
-    data = { segments: segs };
+    S.replaySegs = parseSegs(data);
+    S._segCache = { key: segKey, segs: S.replaySegs };
   }
-  S.replaySegs = parseSegs(data);
-  let evs = [];
-  try { evs = eventList(await api.get("/api/events", { limit: 120 })); } catch {}
-  if (!evs.length) evs = S.recent.slice();
-  await loadTripwires();
-  if (evs.some(extraLooksEmpty)) await hydrateEventExtras(evs);
-  S.replayAllEvents = evs;
-  S.replayEvents = evs.filter((e) => {
-    const t = toMs(e.event_time);
-    const camOk = !S.replayCam || String(e.camera_id) === String(S.replayCam);
-    return camOk && t >= S.tlStart - 86400000 && t <= S.tlEnd + 86400000;
-  });
+  if (!S.replayAllEvents.length || Date.now() - (S._replayEvAt || 0) > 20000) {
+    let evs = [];
+    try { evs = eventList(await api.get("/api/events", { limit: 120 })); } catch {}
+    if (!evs.length) evs = S.recent.slice();
+    await loadTripwires();
+    if (evs.some(extraLooksEmpty)) await hydrateEventExtras(evs);
+    S.replayAllEvents = evs;
+    S._replayEvAt = Date.now();
+  }
+  filterReplayEvents();
 }
 
 function tlPct(ms) {
@@ -1724,7 +1796,10 @@ function timelineInner() {
     ${(S.replayEvents || []).map((e) => {
       const p = tlPct(toMs(e.event_time));
       if (p < 0 || p > 100) return "";
-      return `<button class="tl-ev" data-act="tl-jump" data-ms="${toMs(e.event_time)}" title="${esc(eventTitle(e))}" style="left:${p}%"></button>`;
+      const ms = toMs(e.event_time);
+      const title = `${eventTitle(e)}  ${fmtTime(e.event_time)} · 点击定位`;
+      const on = String(e.id) === String(S.replayEventId) ? " on" : "";
+      return `<button type="button" class="tl-ev${on}" data-act="tl-jump" data-ms="${ms}" data-eid="${esc(e.id || "")}" data-cam="${esc(e.camera_id || "")}" title="${esc(title)}" aria-label="${esc(title)}" style="left:${p}%"></button>`;
     }).join("")}
     ${now >= S.tlStart && now <= S.tlEnd ? `<div class="tl-now" style="left:${tlPct(now)}%"></div>` : ""}
     <div class="tl-head" id="tl-head" style="left:${tlPct(S.replayAt || now)}%"></div>`;
@@ -1784,16 +1859,27 @@ function replayPage() {
       <div class="player-stage" id="rp-stage">
         <img class="poster" id="rp-poster" data-src="/api/cameras/${esc(S.replayCam)}/snapshot" alt="" />
         <video id="rp-video" playsinline hidden></video>
+        <video id="rp-aac" class="live-aac" playsinline muted autoplay></video>
       </div>
     </div>
     <aside class="jump-rail">${replayRailHtml()}</aside>
     <div class="tl-box">
       <div class="tl-legend">
-        <span><i class="lg-seg"></i>录像分段</span>
-        <span><i class="lg-ev"></i>检测事件</span>
-        <span><i class="lg-head"></i>播放位置</span>
-        <span><i class="lg-now"></i>当前时间</span>
-        <span class="muted">滚轮缩放 · 拖动平移 · 点击跳转</span>
+        <div class="tl-keys">
+          <span><i class="lg-seg"></i>录像分段</span>
+          <span><i class="lg-ev"></i>检测事件</span>
+          <span><i class="lg-head"></i>播放位置</span>
+          <span><i class="lg-now"></i>当前时间</span>
+          <span class="muted">滚轮缩放 · 拖动平移 · 点击红点定位事件</span>
+        </div>
+        <div class="tl-skip speeds">
+          <button type="button" class="chip" data-act="tl-skip" data-ms="-30000" title="回退 30 秒">-30秒</button>
+          <button type="button" class="chip" data-act="tl-skip" data-ms="-15000" title="回退 15 秒">-15秒</button>
+          <button type="button" class="chip" data-act="tl-skip" data-ms="-5000" title="回退 5 秒">-5秒</button>
+          <button type="button" class="chip" data-act="tl-skip" data-ms="5000" title="快进 5 秒">+5秒</button>
+          <button type="button" class="chip" data-act="tl-skip" data-ms="15000" title="快进 15 秒">+15秒</button>
+          <button type="button" class="chip" data-act="tl-skip" data-ms="30000" title="快进 30 秒">+30秒</button>
+        </div>
         <span class="mono" id="tl-hover"></span>
       </div>
       <div class="tl" data-act="tl-seek" id="tl">${timelineInner()}</div>
@@ -1802,12 +1888,28 @@ function replayPage() {
     </div>`, true);
 }
 
+function refreshTimelineHead() {
+  const at = S.replayAt || Date.now();
+  const head = $("#tl-head");
+  if (head) head.style.left = tlPct(at) + "%";
+  const clock = $("#rp-clock");
+  if (clock) clock.textContent = fmtStamp(at);
+  const nowEl = $("#tl .tl-now");
+  if (nowEl) nowEl.style.left = tlPct(Date.now()) + "%";
+}
+
 function refreshTimelineDom() {
+  filterReplayEvents();
   const tl = $("#tl");
   if (!tl) return;
   tl.innerHTML = timelineInner();
-  const clock = $("#rp-clock");
-  if (clock) clock.textContent = fmtStamp(S.replayAt || Date.now());
+  const times = $$(".tl-times span");
+  if (times.length >= 3) {
+    times[0].textContent = fmtStamp(S.tlStart);
+    times[1].textContent = fmtStamp((S.tlStart + S.tlEnd) / 2);
+    times[2].textContent = fmtStamp(S.tlEnd);
+  }
+  refreshTimelineHead();
 }
 
 function idsPage(people, pets, visits) {
@@ -2120,6 +2222,7 @@ async function showEventPop(id) {
   zoomMap.delete("evpop");
   $("#evpop")?.remove();
   root.insertAdjacentHTML("beforeend", eventPopHtml(ev));
+  bindEventOverlay($("#evpop"));
   await hydrate($("#evpop"));
   bindEventOverlay($("#evpop"));
 }
@@ -2153,6 +2256,32 @@ function applySpeed(video) {
   $$(".speeds .chip").forEach((n) => n.classList.toggle("on", Number(n.dataset.v) === rate));
 }
 
+async function jumpTlEvent(el) {
+  if (!el) return;
+  const ms = Number(el.dataset.ms);
+  if (!Number.isFinite(ms)) return;
+  const cam = el.dataset.cam || "";
+  const camChanged = !!(cam && String(cam) !== String(S.replayCam));
+  if (cam) S.replayCam = cam;
+  const outside = ms < S.tlStart || ms > S.tlEnd;
+  if (outside) panTlTo(ms, "center");
+  if (camChanged || outside) await loadReplayData();
+  await seekReplay(ms, { eventId: el.dataset.eid || null });
+}
+
+async function skipReplay(deltaMs) {
+  const delta = Number(deltaMs) || 0;
+  let t = (S.replayAt || Date.now()) + delta;
+  if (t > Date.now()) t = Date.now();
+  const span = Math.max(1, S.tlEnd - S.tlStart);
+  if (t < S.tlStart || t > S.tlEnd) {
+    S.tlStart = t - span * 0.5;
+    S.tlEnd = S.tlStart + span;
+    await loadReplayData();
+  }
+  await seekReplay(t);
+}
+
 async function seekReplay(ms, opts = {}) {
   S.replayAt = ms;
   S.replayPlaying = true;
@@ -2164,6 +2293,49 @@ async function seekReplay(ms, opts = {}) {
   refreshTimelineDom();
   await playReplaySource();
   tickReplay();
+}
+
+function stopReplayAac() {
+  stopPlayer("replay-aac");
+  const aac = $("#rp-aac");
+  if (aac) {
+    aac.muted = true;
+    try { aac.pause(); } catch {}
+  }
+}
+
+function unmuteReplay(video) {
+  if (!video) return;
+  video.volume = mediaVolume();
+  video.muted = false;
+}
+
+async function playReplayLive(video, poster, cam) {
+  const grant = await ensureGrant(cam);
+  const url = hlsFromGrant(grant, livePref(cam).source);
+  const aacUrl = aacHlsFromGrant(grant);
+  if (!url) return false;
+  video.volume = mediaVolume();
+  attachHls(video, url, "replay", !!aacUrl, {
+    onPlay: () => { video.hidden = false; if (poster) poster.hidden = true; },
+    onFail: () => { stopReplayAac(); video.hidden = true; showPoster(poster, cam); },
+  });
+  if (aacUrl) {
+    const aac = $("#rp-aac") || video;
+    if (aac !== video) {
+      attachHls(aac, aacUrl, "replay-aac", false, {
+        needVideo: false,
+        onFail: () => {
+          stopReplayAac();
+          playMedia(video, true);
+        },
+      });
+    } else playMedia(video, true);
+  } else {
+    stopReplayAac();
+    playMedia(video, true);
+  }
+  return true;
 }
 
 function showPoster(poster, cam) {
@@ -2179,6 +2351,7 @@ async function playRecording(video, poster, recId, seekSec) {
   const cur = video.getAttribute("src") || "";
   video.hidden = false;
   if (poster) poster.hidden = true;
+  unmuteReplay(video);
   applySpeed(video);
   if (cur.includes(`/recordings/${recId}/`)) {
     try { video.currentTime = Math.max(0, seekSec); } catch {}
@@ -2187,6 +2360,7 @@ async function playRecording(video, poster, recId, seekSec) {
   }
   stopPlayer("replay");
   const gen = ++S.playGen;
+  video.volume = mediaVolume();
   video.src = url;
   const onMeta = () => {
     if (S.playGen !== gen) return;
@@ -2203,24 +2377,20 @@ async function playReplaySource() {
   const video = $("#rp-video");
   const poster = $("#rp-poster");
   if (!video) return;
+  unmuteReplay(video);
   const cam = S.replayCam;
   if (S.replayLive) {
     try {
-      const url = await grantLive(cam, livePref(cam).source);
-      if (url) {
-        attachHls(video, url, "replay", livePref(cam).muted, {
-          onPlay: () => { video.hidden = false; if (poster) poster.hidden = true; },
-          onFail: () => { video.hidden = true; showPoster(poster, cam); },
-        });
-        return;
-      }
+      if (await playReplayLive(video, poster, cam)) return;
     } catch {}
+    stopReplayAac();
     showPoster(poster, cam);
     video.hidden = true;
     if (S._liveSnap) clearInterval(S._liveSnap);
     S._liveSnap = setInterval(() => showPoster(poster, cam), 700);
     return;
   }
+  stopReplayAac();
   if (S._liveSnap) { clearInterval(S._liveSnap); S._liveSnap = 0; }
   const prev = players.get("replay");
   if (prev?.hls) stopPlayer("replay");
@@ -2236,6 +2406,7 @@ async function playReplaySource() {
         video.src = `/api/events/${S.replayEventId}/clip/video?t=${gen}`;
         video.hidden = false;
         if (poster) poster.hidden = true;
+        unmuteReplay(video);
         applySpeed(video);
         if (S.replayPlaying) video.play().catch(() => {});
         players.set("replay", { hls: null, video, url: video.src });
@@ -2260,7 +2431,7 @@ async function playReplaySource() {
       const url = info?.url || info?.hls_url || "";
       if (url) {
         if (String(url).includes(".m3u8")) {
-          attachHls(video, url, "replay", true);
+          attachHls(video, url, "replay", false);
           video.hidden = false;
           if (poster) poster.hidden = true;
           return;
@@ -2268,6 +2439,7 @@ async function playReplaySource() {
         video.src = url;
         video.hidden = false;
         if (poster) poster.hidden = true;
+        unmuteReplay(video);
         if (S.replayPlaying) video.play().catch(() => {});
         return;
       }
@@ -2279,7 +2451,7 @@ async function playReplaySource() {
     if (lr?.mode === "hls_live") {
       const url = hlsFromGrant(lr, livePref(cam).source);
       if (url) {
-        attachHls(video, url, "replay", true, { secondsBehind: lr.seconds_behind_live });
+        attachHls(video, url, "replay", false, { secondsBehind: lr.seconds_behind_live });
         video.hidden = false;
         if (poster) poster.hidden = true;
         return;
@@ -2303,8 +2475,10 @@ function tickReplay() {
       const span = S.tlEnd - S.tlStart;
       S.tlStart = S.replayAt - span * 0.8;
       S.tlEnd = S.tlStart + span;
+      refreshTimelineDom();
+    } else {
+      refreshTimelineHead();
     }
-    refreshTimelineDom();
     replayTimer = requestAnimationFrame(step);
   };
   replayTimer = requestAnimationFrame(step);
@@ -2359,14 +2533,26 @@ async function submitGate(form) {
 
 async function render() {
   const parsed = parseHash();
+  const prevRoute = S.route;
   S.route = parsed.parts[0] || "home";
   const enteringHome = S.route === "home" || S.route === "live";
-  if (!enteringHome) document.body.classList.remove("yk-home");
-  stopPagePlayers();
-  if (S._snapTimer) { clearInterval(S._snapTimer); S._snapTimer = 0; }
-  if (S._liveWatch) { clearInterval(S._liveWatch); S._liveWatch = 0; }
+  const stayHome = enteringHome && (prevRoute === "home" || prevRoute === "live") && mosaicAlive();
+  if (!enteringHome) {
+    document.body.classList.remove("yk-home", "tile-fs");
+    $("#home-keep .protect")?.classList.remove("tile-fs");
+    $$("#home-keep .mtile.is-fs").forEach((el) => el.classList.remove("is-fs"));
+    parkMosaicAudio();
+  }
+  if (!stayHome) {
+    stopPagePlayers();
+    if (S._snapTimer) { clearInterval(S._snapTimer); S._snapTimer = 0; }
+    if (S._liveWatch) { clearInterval(S._liveWatch); S._liveWatch = 0; }
+  }
   wipeBlobs();
-  if (replayTimer) { cancelAnimationFrame(replayTimer); replayTimer = 0; }
+  if (S.route !== "replay" && replayTimer) {
+    cancelAnimationFrame(replayTimer);
+    replayTimer = 0;
+  }
   if (parsed.query.cam) S.evCam = parsed.query.cam;
   if (S.route === "system" && parsed.query.tab) S.sysTab = parsed.query.tab;
   if (!api.token && !api.demo) {
@@ -2376,15 +2562,13 @@ async function render() {
     return;
   }
   try {
-    if (!S.me) await loadMe();
-    if (!S.cameras.length) await loadCameras();
-    await loadUnread();
-    await loadAlerts();
-    try { await loadRecentEvents(); } catch {}
-    try { S.pack.metrics = await api.get("/api/system/metrics"); } catch {}
-    try { S.pack.space = await api.get("/api/storage/space"); } catch {}
-    try { S.pack.status = S.pack.status || await api.get("/api/system/status"); } catch {}
-    try { S.pack.selfCheck = await api.get("/api/system/self-check"); } catch {}
+    await Promise.all([
+      S.me ? null : loadMe(),
+      S.cameras.length ? null : loadCameras(),
+      loadUnread(),
+      loadShellPack(),
+      loadRecentEvents().catch(() => {}),
+    ].filter(Boolean));
   } catch (e) {
     if (e.status === 401) {
       api.setToken(""); api.setDemo(false);
@@ -2427,6 +2611,7 @@ async function render() {
   if (S.modal) root.insertAdjacentHTML("beforeend", modalHtml(S.modal.kind, S.modal.ctx));
   await hydrate(root);
   bindClock();
+  applyMediaVolume();
 }
 
 async function renderGate() {
@@ -2453,10 +2638,6 @@ async function renderGate() {
 }
 
 async function renderHome() {
-  await loadRecentEvents();
-  try { S.pack.metrics = await api.get("/api/system/metrics"); } catch {}
-  try { S.pack.space = await api.get("/api/storage/space"); } catch {}
-  try { S.pack.status = await api.get("/api/system/status"); } catch {}
   ensureDefaultLiveAudio();
   document.body.classList.add("yk-home");
   frame().innerHTML = chrome("", true);
@@ -2467,6 +2648,10 @@ async function renderHome() {
     const p = $(".protect", keep);
     p?.classList.toggle("rail-off", !S.railOn);
     p?.classList.toggle("layout-lock", S.layoutLock);
+    p?.classList.remove("tile-fs");
+    document.body.classList.remove("tile-fs");
+    $$(".mtile.is-fs", p || keep).forEach((el) => el.classList.remove("is-fs"));
+    refreshZoomHints();
     refreshHomeRail();
     bindMosaic({ keepLive: true });
     recoverMosaicLive(false);
@@ -2489,8 +2674,12 @@ async function renderEvents() {
   if (!S.event || (S.evCam && String(S.event.camera_id) !== String(S.evCam))) S.event = S.events[0] || null;
   if (S.event) await loadEventTrack(S.event);
   frame().innerHTML = eventsPage();
-  await hydrate(root);
   bindEventOverlay();
+  const view = $("#ev-view");
+  if (view) await hydrate(view);
+  bindEventOverlay();
+  const rail = $(".ev-stage .rail");
+  if (rail) hydrate(rail);
   const evFrame = $("#ev-frame");
   const st = zoomMap.get("ev");
   if (evFrame && st) viewZoom(evFrame, st);
@@ -2573,6 +2762,7 @@ root.addEventListener("click", async (e) => {
   const el = e.target.closest("[data-act]");
   if (!el || el.tagName === "FORM") return;
   const act = el.dataset.act;
+  if (act === "vol") return;
   try {
     if (act === "do-login") { e.preventDefault(); e.stopPropagation(); await submitGate(el.closest("form")); return; }
     if (act === "demo") { enterDemo(); enterApp(); go("/home"); await render(); return; }
@@ -2606,9 +2796,7 @@ root.addEventListener("click", async (e) => {
       p?.classList.toggle("layout-lock", S.layoutLock);
       el.innerHTML = `${S.layoutLock ? I.lock : I.unlock} ${S.layoutLock ? "已锁定" : "锁定布局"}`;
       el.title = S.layoutLock ? "解锁布局" : "锁定布局，禁止拖动拉伸";
-      $$(".zoom-hint").forEach((h) => {
-        h.textContent = S.layoutLock ? "点击切声 · 滚轮放大" : "点击切声 · 拖动 · 滚轮放大";
-      });
+      refreshZoomHints();
       toast(S.layoutLock ? "布局已锁定" : "布局已解锁", "ok");
       return;
     }
@@ -2651,6 +2839,7 @@ root.addEventListener("click", async (e) => {
       const view = $("#ev-view");
       if (view) {
         view.innerHTML = eventStageHtml(S.event);
+        bindEventOverlay();
         await hydrate(view);
         bindEventOverlay();
       }
@@ -2711,11 +2900,10 @@ root.addEventListener("click", async (e) => {
       S.replayPlaying = true;
       S.replayEventId = null;
       S.replayAt = Date.now();
-      if (S.replayAt < S.tlStart || S.replayAt > S.tlEnd) {
-        S.tlEnd = S.replayAt;
-        S.tlStart = S.replayAt - 3600000;
-      }
+      if (S.replayAt < S.tlStart || S.replayAt > S.tlEnd) panTlTo(S.replayAt, "end");
       setReplayLiveUi(true);
+      await loadReplayData();
+      refreshTimelineDom();
       await playReplaySource();
       tickReplay();
       return;
@@ -2724,11 +2912,14 @@ root.addEventListener("click", async (e) => {
       S.replayPlaying = !S.replayPlaying;
       el.textContent = S.replayPlaying ? "暂停" : "播放";
       const video = $("#rp-video");
+      const aac = $("#rp-aac");
       if (S.replayPlaying) {
-        video?.play().catch(() => {});
+        if (video) playMedia(video, !players.get("replay-aac"));
+        if (aac && players.get("replay-aac")) playMedia(aac, true);
         tickReplay();
       } else {
         video?.pause();
+        aac?.pause();
       }
       return;
     }
@@ -2738,8 +2929,14 @@ root.addEventListener("click", async (e) => {
       return;
     }
     if (act === "tl-jump") {
-      if (el.dataset.cam) S.replayCam = el.dataset.cam;
-      await seekReplay(Number(el.dataset.ms), { eventId: el.dataset.eid || null });
+      e.preventDefault();
+      e.stopPropagation();
+      await jumpTlEvent(el);
+      return;
+    }
+    if (act === "tl-skip") {
+      e.preventDefault();
+      await skipReplay(Number(el.dataset.ms) || 0);
       return;
     }
     if (act === "tl-span") {
@@ -2831,6 +3028,14 @@ root.addEventListener("click", async (e) => {
 });
 
 root.addEventListener("pointerdown", (e) => {
+  const evDot = e.target.closest(".tl-ev");
+  if (!evDot) return;
+  e.preventDefault();
+  e.stopImmediatePropagation();
+  jumpTlEvent(evDot);
+}, true);
+
+root.addEventListener("pointerdown", (e) => {
   const el = e.target.closest("[data-act=ptz]");
   if (el) {
     e.preventDefault();
@@ -2842,31 +3047,46 @@ root.addEventListener("pointerdown", (e) => {
     window.addEventListener("pointerup", up);
     return;
   }
+  if (e.target.closest(".tl-ev, .tl-skip, [data-act=tl-skip], [data-act=tl-jump]")) return;
   const tl = e.target.closest("#tl");
   if (tl) {
     e.preventDefault();
     const startX = e.clientX;
     const a0 = S.tlStart, b0 = S.tlEnd;
     let moved = 0;
+    let dragRaf = 0;
     const move = (ev) => {
       moved += Math.abs(ev.clientX - startX);
       const r = tl.getBoundingClientRect();
       const dx = (ev.clientX - startX) / r.width * (b0 - a0);
       S.tlStart = a0 - dx;
       S.tlEnd = b0 - dx;
-      refreshTimelineDom();
+      if (dragRaf) return;
+      dragRaf = requestAnimationFrame(() => {
+        dragRaf = 0;
+        refreshTimelineDom();
+      });
     };
     const up = async (ev) => {
       window.removeEventListener("pointermove", move);
       window.removeEventListener("pointerup", up);
-      if (moved < 12) await seekReplay(msFromTimelineEvent(ev, tl));
-      else await loadReplayData().then(refreshTimelineDom);
+      if (moved < 12) {
+        const hit = document.elementFromPoint(ev.clientX, ev.clientY);
+        const dot = hit && hit.closest && hit.closest(".tl-ev");
+        if (dot) {
+          await jumpTlEvent(dot);
+          return;
+        }
+        await seekReplay(msFromTimelineEvent(ev, tl));
+        return;
+      }
+      await loadReplayData().then(refreshTimelineDom);
     };
     window.addEventListener("pointermove", move);
     window.addEventListener("pointerup", up);
     return;
   }
-  if (e.target.closest(".tile-tools, [data-act=tile-src], [data-act=tile-mute], [data-act=reset-layout], [data-act=toggle-rail], [data-act=toggle-lock], .ev-tools, .evpop-h, .evpop-f")) return;
+  if (e.target.closest(".tile-tools, .vol-ctl, [data-act=vol], [data-act=tile-src], [data-act=tile-mute], [data-act=reset-layout], [data-act=toggle-rail], [data-act=toggle-lock], .ev-tools, .evpop-h, .evpop-f")) return;
   const pw = e.target.closest(".player-wrap");
   if (pw) {
     const stage = $("#rp-stage", pw) || pw;
@@ -2921,7 +3141,7 @@ root.addEventListener("pointerdown", (e) => {
     window.addEventListener("pointerup", up);
     return;
   }
-  if (S.layoutLock) {
+  if (S.layoutLock || tile.classList.contains("is-fs")) {
     focusTileAudio(id, tile);
     return;
   }
@@ -2977,8 +3197,13 @@ root.addEventListener("wheel", (e) => {
     const ns = Math.max(60 * 1000, Math.min(7 * 86400000, next));
     S.tlStart = center - ns * p;
     S.tlEnd = S.tlStart + ns;
+    if (!root._tlZoomRaf) {
+      root._tlZoomRaf = requestAnimationFrame(() => {
+        root._tlZoomRaf = 0;
+        refreshTimelineDom();
+      });
+    }
     clearTimeout(root._tlZoom);
-    refreshTimelineDom();
     root._tlZoom = setTimeout(() => { loadReplayData().then(refreshTimelineDom); }, 180);
     return;
   }
@@ -3006,12 +3231,19 @@ root.addEventListener("wheel", (e) => {
   zoomMap.set(id, st);
   applyZoom(tile, st);
   const hint = $(".zoom-hint", tile);
-  if (hint) hint.textContent = st.s === 1 ? "点击切声 · 拖动 · 滚轮放大" : `${st.s.toFixed(1)}x`;
+  if (hint) hint.textContent = zoomHintText(tile);
 }, { passive: false });
+
+root.addEventListener("input", (e) => {
+  const el = e.target.closest("[data-act=vol]");
+  if (!el) return;
+  setLiveVolume(Number(el.value) / 100);
+});
 
 root.addEventListener("change", async (e) => {
   const el = e.target.closest("[data-act]");
   if (!el) return;
+  if (el.dataset.act === "vol") { setLiveVolume(Number(el.value) / 100); return; }
   if (el.dataset.act === "ev-cam") { S.evCam = el.value; await render(); }
   if (el.dataset.act === "rp-cam") { S.replayCam = el.value || el.dataset.id; S.replayEvAll = false; S.replayLive = false; S.replayEventId = null; await render(); }
   if (el.dataset.act === "rp-date") {
@@ -3033,8 +3265,22 @@ root.addEventListener("keydown", (e) => {
   if (q && e.key === "Enter") { S.q = q.value.trim(); render(); }
 });
 
+root.addEventListener("dblclick", (e) => {
+  if (e.target.closest(".tile-tools, .vol-ctl, [data-act=vol], [data-act=tile-rz], .rz, .rail, .rail-tab, .ev")) return;
+  const tile = e.target.closest(".mtile");
+  if (!tile) return;
+  e.preventDefault();
+  toggleTileFullscreen(tile);
+});
+
 document.addEventListener("keydown", (e) => {
   if (e.key !== "Escape" && e.key !== "Esc") return;
+  const fsTile = pageFsTile();
+  if (fsTile) {
+    e.preventDefault();
+    toggleTileFullscreen(fsTile);
+    return;
+  }
   if ($("#evpop")) {
     e.preventDefault();
     closeEventPop();

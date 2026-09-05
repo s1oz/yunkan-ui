@@ -1,7 +1,9 @@
 # YunKan-UI — sidecar for a running YunKan / SkyView box.
+# Image: s1oz/yunkan-ui:latest  (docker hub / ghcr.io/s1oz/yunkan-ui)
 # YunKan itself uses host networking; this UI does too so 127.0.0.1:23326 / :23406 work.
 #
-#   docker compose up -d --build
+#   docker compose up -d
+#   docker compose up -d --build   # rebuild from this directory
 #   open http://<host>:18081/
 #
 # If YunKan is on another machine, keep host mode or switch to bridge and
@@ -12,7 +14,7 @@ name: yunkan-ui
 services:
   yunkan-ui:
     build: .
-    image: yunkan-ui:local
+    image: s1oz/yunkan-ui:latest
     container_name: YunKan-UI
     network_mode: host
     restart: unless-stopped

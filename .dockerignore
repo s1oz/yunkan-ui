@@ -1,9 +1,9 @@
-preview/
-docs/
-__pycache__/
-*.pyc
-*.pyo
-start.bat
 .git
-.gitignore
-unraid-icon.png
+.github
+.env
+__pycache__
+*.pyc
+preview
+docs/capture-screenshots.py
+docs/screenshots
+templates

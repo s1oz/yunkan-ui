@@ -5,6 +5,7 @@
 **给 [云瞰 YunKan](https://github.com/mrtian2016/yunkan) 用的另一套 Web 工作台 —— 自由拼贴直播、AI 事件、时间轴回放。推理在盒子上，页面在浏览器里。**
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+[![Docker Pulls](https://img.shields.io/docker/pulls/s1oz/yunkan-ui.svg)](https://hub.docker.com/r/s1oz/yunkan-ui)
 [![Unofficial](https://img.shields.io/badge/YunKan-unofficial-lightgrey.svg)](https://github.com/mrtian2016/yunkan)
 
 [English](./README.md) · 官方产品：[mrtian2016/yunkan](https://github.com/mrtian2016/yunkan) · [yun-kan.com](https://yun-kan.com/zh-CN)
@@ -98,43 +99,79 @@ export YUNKAN_MEDIA=http://127.0.0.1:23406
 
 ## Docker
 
-不替换官方云瞰容器，只作为旁路工作台。
+不替换官方云瞰容器，只作为旁路工作台。镜像：**[s1oz/yunkan-ui](https://hub.docker.com/r/s1oz/yunkan-ui)**（另有 `ghcr.io/s1oz/yunkan-ui`）。
+
+### 拉取即用（和云瞰同一台机器）
 
 ```bash
-git clone https://github.com/s1oz/yunkan-ui.git
-cd yunkan-ui
-docker compose up -d --build
-```
-
-打开 `http://<主机>:18081/`。Compose 使用 **host** 网络，这样 `127.0.0.1:23326` / `:23406` 才能打到同一台机器上的云瞰。
-
-等价的 `docker run`：
-
-```bash
-docker build -t yunkan-ui:local .
+docker pull s1oz/yunkan-ui:latest
 docker run -d --name YunKan-UI --network host --restart unless-stopped \
   -e YUNKAN_API=http://127.0.0.1:23326 \
   -e YUNKAN_MEDIA=http://127.0.0.1:23406 \
   -e PORT=18081 \
-  yunkan-ui:local
+  s1oz/yunkan-ui:latest
 ```
 
-云瞰在另一台机器上时，把 `YUNKAN_API` / `YUNKAN_MEDIA` 改成那台的地址。若改成 bridge 网络，要映射 `18081:18081`，**不要**再写 `127.0.0.1`（那是 UI 容器自己）。
+打开 `http://<主机>:18081/`。必须用 **host** 网络，`127.0.0.1:23326` / `:23406` 才能打到本机云瞰。
+
+### Compose（拉取或本地构建）
+
+```bash
+git clone https://github.com/s1oz/yunkan-ui.git
+cd yunkan-ui
+docker compose up -d
+```
+
+`docker compose up -d --build` 会用当前仓库重新构建，而不是只拉镜像。
+
+### 云瞰在另一台机器
+
+```bash
+docker run -d --name YunKan-UI -p 18081:18081 --restart unless-stopped \
+  -e YUNKAN_API=http://192.168.1.10:23326 \
+  -e YUNKAN_MEDIA=http://192.168.1.10:23406 \
+  s1oz/yunkan-ui:latest
+```
+
+bridge 网络下 **不要** 把 `YUNKAN_*` 写成 `127.0.0.1`（那是 UI 容器自己）。
+
+### 本地构建
+
+```bash
+docker build -t s1oz/yunkan-ui:latest .
+```
+
+发布（维护者）：`docker push s1oz/yunkan-ui:latest`，以及 `docker push ghcr.io/s1oz/yunkan-ui:latest`。
+
+### 自动构建推送到 Docker Hub（GitHub Actions）
+
+工作流 [`.github/workflows/docker.yml`](./.github/workflows/docker.yml) 会在每次推送 `main`（以及打 `v*` 标签）时构建，并推送到 `s1oz/yunkan-ui` 和 `ghcr.io/s1oz/yunkan-ui`。同时会更新 Docker Hub 上的**短简介**和完整说明。
+
+只需在 GitHub 配一次密钥：
+
+1. 打开 [Docker Hub](https://hub.docker.com/) → 右上角头像 → **Account Settings** → **Personal access tokens** → **Generate new token**。权限选 **Read, Write, Delete**，生成后立刻复制（只显示一次）。
+2. 打开 GitHub 仓库 [s1oz/yunkan-ui](https://github.com/s1oz/yunkan-ui) → **Settings** → **Secrets and variables** → **Actions** → **New repository secret**：
+   - Name：`DOCKERHUB_TOKEN`
+   - Secret：上一步的 token
+3. 之后每次 `git push origin main`，或在 **Actions** 里打开 **docker** 工作流点 **Run workflow**，就会自动构建并推送。
+4. 第一次推到 GHCR 后：GitHub → **Packages** → `yunkan-ui` → Package settings → 若希望别人免登录拉取，把可见性改成 **Public**。
+
+Docker Hub 网站上的 “Automated Builds”（把 GitHub 绑到 Hub 的 Builds）**不必再开**。已经用 GitHub Actions 了，两边一起开会构建两次。
 
 ## Unraid
 
 1. 云瞰已经在跑（应用市场：**YunKan-OpenVINO** / CUDA / CPU）。不要动它。
-2. 克隆本仓库后用 Compose 启动：
+2. 添加容器，镜像填 `s1oz/yunkan-ui:latest`，网络选 **host**，环境变量 `YUNKAN_API=http://127.0.0.1:23326`、`YUNKAN_MEDIA=http://127.0.0.1:23406`、`PORT=18081`。或克隆后 Compose：
 
 ```bash
 git clone https://github.com/s1oz/yunkan-ui.git /mnt/user/appdata/yunkan-ui
 cd /mnt/user/appdata/yunkan-ui
-docker compose up -d --build
+docker compose up -d
 ```
 
 3. Docker 页会出现 **YunKan-UI**。地球图标打开 `http://[IP]:18081/`。图标是 [unraid-icon.png](./unraid-icon.png)。
 
-可选：把 [`templates/unraid.xml`](./templates/unraid.xml) 拷到 `/boot/config/plugins/dockerMan/templates-user/my-YunKan-UI.xml`，之后「添加容器」能选这个模板。镜像名是 `yunkan-ui:local`，要先构建（`docker compose build` 或 `docker build -t yunkan-ui:local .`）。不要 Compose 和模板各起一份。
+可选：把 [`templates/unraid.xml`](./templates/unraid.xml) 拷到 `/boot/config/plugins/dockerMan/templates-user/my-YunKan-UI.xml`，之后「添加容器」能选这个模板。不要 Compose 和模板各起一份。
 
 ## 「跳转原生系统设置」怎么拼地址
 
@@ -159,6 +196,8 @@ serve.py             静态文件 + 同源反代
 start.sh / start.bat Linux / Windows 启动
 Dockerfile           python:3.12-alpine 旁路容器
 docker-compose.yml   host 网络 compose（Unraid Compose Manager 可用）
+.github/workflows    构建并推送 s1oz/yunkan-ui 到 Docker Hub 和 GHCR
+docs/dockerhub.md    Docker Hub 完整简介（截图用 GitHub 绝对地址）
 templates/unraid.xml Unraid Docker 模板
 unraid-icon.png      Unraid Docker 页图标
 docs/screenshots     README 配图（演示数据）
