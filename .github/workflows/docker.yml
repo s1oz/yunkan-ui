@@ -55,5 +55,5 @@ jobs:
           username: s1oz
           password: ${{ secrets.DOCKERHUB_TOKEN }}
           repository: s1oz/yunkan-ui
-          short-description: Unofficial YunKan web workbench. 云瞰非官方工作台：直播拼贴、AI 事件、时间轴回放。
+          short-description: YunKan-UI. Unofficial workbench for YunKan (OpenVINO/CUDA/TRT). 云瞰非官方工作台。
           readme-filepath: ./docs/dockerhub.md

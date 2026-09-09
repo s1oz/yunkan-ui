@@ -320,10 +320,10 @@ async function loadShellPack(force = false) {
 }
 
 const FINDING_WHY = {
-  ep_init_failed: "OpenVINO 加速引擎初始化失败",
-  device_missing: "没有可用的核显设备",
-  no_igpu: "未检测到 Intel 核显",
-  gpu_not_available: "OpenVINO 认不到 GPU",
+  ep_init_failed: "加速引擎初始化失败",
+  device_missing: "没有可用的加速设备",
+  no_igpu: "未检测到核显",
+  gpu_not_available: "加速设备不可用",
 };
 function findingText(f) {
   if (f == null) return "";
@@ -332,7 +332,7 @@ function findingText(f) {
   const id = f.id || f.code || "";
   const why = FINDING_WHY[f.reason] || f.reason || "加速未生效";
   if (id === "inference_cpu_fallback") {
-    return `AI 推理配置为 ${f.configured || "OpenVINO"}，实际跑在 ${f.effective || "CPU"} 上（${why}）。不是宕机：检测还在工作，只是没用上核显，CPU 会更忙。`;
+    return `AI 推理配置为 ${f.configured || "加速后端"}，实际跑在 ${f.effective || "CPU"} 上（${why}）。不是宕机：检测还在工作，只是没用上加速设备，CPU 会更忙。`;
   }
   if (id === "decode_fallback") {
     return `视频解码回退到软件解码（${why}）。画面仍能看，CPU 占用会升高。`;
@@ -1954,7 +1954,7 @@ function idsPage(people, pets, visits) {
 function trainingPage(pack) {
   const tabs = [
     feat("training", "label") && ["jobs", "训练"],
-    feat("training", "tensorrt") && ["trt", "OpenVINO 引擎"],
+    feat("training", "tensorrt") && ["trt", "推理引擎"],
     feat("training", "vlm") && ["vlm", "VLM"],
   ].filter(Boolean);
   if (tabs.length && !tabs.some((t) => t[0] === S.trainTab)) S.trainTab = tabs[0][0];
@@ -1973,7 +1973,7 @@ function trainingPage(pack) {
   } else if (S.trainTab === "trt") {
     body = asList(pack.models, ["models"]).map((m) => `
       <div class="sheet flex" style="margin-bottom:8px"><div class="grow"><b>${esc(m.name)}</b>
-        <div class="tiny muted">${esc(m.backend || "OpenVINO")} · ${esc(m.engine)}</div></div>
+        <div class="tiny muted">${esc(m.backend || "—")} · ${esc(m.engine)}</div></div>
         <button class="btn sm" data-act="convert" data-name="${esc(m.name)}">转换</button></div>`).join("");
   } else {
     body = (pack.vlm?.models || []).map((m) => `
@@ -2038,7 +2038,7 @@ function systemPage(pack) {
     const metrics = pack.metrics || {};
     body = `${findingHtml(S.alerts)}<div class="grid-2">
       <div class="sheet"><h3 style="margin-top:0">运行时</h3>
-        <p>推理 ${esc(st.inference || "OpenVINO")} · 解码 ${esc(st.decode || "VAAPI")}<br>
+        <p>推理 ${esc(st.inference || "—")} · 解码 ${esc(st.decode || "—")}<br>
         CPU ${esc(metrics.cpu_pct ?? 18)}% · 内存 ${esc(metrics.rss_mb ?? 1240)} MB</p>
         <p class="tiny muted">${SLOGAN}</p></div>
       <div class="sheet"><h3 style="margin-top:0">服务</h3>

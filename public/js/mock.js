@@ -104,8 +104,8 @@ const DB = {
   ],
   models: [
     { name: "yolo26n", engine: "ready", backend: "OpenVINO" },
-    { name: "yolo26s", engine: "converting", backend: "OpenVINO" },
-    { name: "face-r50", engine: "ready", backend: "OpenVINO" },
+    { name: "yolo26s", engine: "converting", backend: "TensorRT" },
+    { name: "face-r50", engine: "ready", backend: "CUDA" },
   ],
   gb: [
     { id: "34020000001320000001", name: "小区南门", channels: 4, online: true },
@@ -371,7 +371,7 @@ export function installMock(api) {
       return {
         cameras: DB.cameras.map((c) => ({
           id: c.id, name: c.name, detection_enabled: c.detection_enabled,
-          status: c.detection_enabled ? "运行 · OpenVINO" : "关闭",
+          status: c.detection_enabled ? "运行" : "关闭",
         })),
       };
     }
@@ -392,7 +392,12 @@ export function installMock(api) {
       return {};
     }
     if (p === "/api/detection/inference-backends") {
-      return { items: [{ id: "openvino", name: "OpenVINO", active: true }, { id: "cpu", name: "CPU", active: false }] };
+      return { items: [
+        { id: "openvino", name: "OpenVINO", active: true },
+        { id: "cuda", name: "CUDA", active: false },
+        { id: "tensorrt", name: "TensorRT", active: false },
+        { id: "cpu", name: "CPU", active: false },
+      ] };
     }
     if (p === "/api/automations") return { automations: DB.automations };
     {
@@ -430,17 +435,17 @@ export function installMock(api) {
     }
     if (p === "/api/users") return { users: DB.users };
     if (p === "/api/storage/space") return { used_bytes: 186 * 1024 ** 3, free_bytes: 812 * 1024 ** 3, total: 1024 * 1024 ** 3 };
-    if (p === "/api/system/status") return { mode: "normal", inference: "OpenVINO", decode: "VAAPI", database: "sqlite" };
+    if (p === "/api/system/status") return { mode: "normal", inference: "OpenVINO", decode: "VAAPI", database: "sqlite", edition: "YunKan" };
     if (p === "/api/system/metrics") return {
       cpu_pct: 18, rss_mb: 1240,
       processes: {
         detection: { infer_ms: 12.4, decode_ms: 6.8, infer_latency_ms: 12.4 },
       },
-      gpu: "iGPU · OpenVINO",
+      gpu: "iGPU",
     };
     if (p === "/api/system/self-check") return {
       findings: [{ level: "warn", code: "decode_fallback", message: "楼道相机解码回落到软件" }],
-      metrics_available: true, inference_ep: "OpenVINO",
+      metrics_available: true, inference_ep: "GPU",
     };
     if (p === "/api/system/services") {
       return { supervisor: "compose", services: [
@@ -448,12 +453,12 @@ export function installMock(api) {
         { name: "automation", status: "up" }, { name: "faces", status: "up" },
       ]};
     }
-    if (p === "/api/system/version") return { version: "0.1.0-openvino", latest: "0.1.0-openvino" };
+    if (p === "/api/system/version") return { version: "0.1.0", latest: "0.1.0" };
     if (p === "/api/admin/overview") return { cameras: DB.cameras.length, events_today: 8, people: 3, pets: 2 };
     if (p === "/api/cloud115/account") return { logged_in: false };
     if (p === "/api/system/acme/status") return { active: false, days_left: null };
     if (p === "/api/logs/services") return { services: ["api", "detection", "automation"] };
-    if (p.startsWith("/api/logs/")) return { lines: ["[10:02:11] detection using OpenVINO GPU", "[10:02:14] event person cam-2"] };
+    if (p.startsWith("/api/logs/")) return { lines: ["[10:02:11] detection using GPU", "[10:02:14] event person cam-2"] };
 
     if (method === "POST" || method === "PUT" || method === "PATCH" || method === "DELETE") return {};
     return {};

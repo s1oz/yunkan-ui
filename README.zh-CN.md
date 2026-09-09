@@ -1,4 +1,4 @@
-# YunKan-OpenVINO UI
+# YunKan-UI
 
 <img src="unraid-icon.png" width="88" alt="YunKan-UI 图标" align="right">
 
@@ -12,11 +12,11 @@
 
 ---
 
-这是一套**重写的 Web 界面**，不是原管理后台换皮。它对接官方 Docker 镜像已经提供的本地 API。录像和推理都留在你自己的机器上。
+这是一套**重写的 Web 界面**，不是原管理后台换皮。它对接官方云瞰各版本已经提供的本地 API（**OpenVINO、CUDA、TensorRT、Trainer、CPU** 等）。录像和推理都留在你自己的机器上。
 
 > 非官方项目，与云瞰作者无隶属或背书关系。云瞰本体是商业闭源软件，按户授权。
 
-口号：**OpenVINO 加速，云瞰每一帧**。
+口号：**云瞰每一帧**。
 
 ## 界面截图
 
@@ -160,7 +160,7 @@ Docker Hub 网站上的 “Automated Builds”（把 GitHub 绑到 Hub 的 Build
 
 ## Unraid
 
-1. 云瞰已经在跑（应用市场：**YunKan-OpenVINO** / CUDA / CPU）。不要动它。
+1. 云瞰已经在跑（应用市场：**YunKan**，OpenVINO / CUDA / TensorRT / Trainer / CPU 等均可）。不要动那个容器。
 2. 添加容器，镜像填 `s1oz/yunkan-ui:latest`，网络选 **host**，环境变量 `YUNKAN_API=http://127.0.0.1:23326`、`YUNKAN_MEDIA=http://127.0.0.1:23406`、`PORT=18081`。或克隆后 Compose：
 
 ```bash
@@ -223,4 +223,4 @@ docs/screenshots     README 配图（演示数据）
 
 ---
 
-*OpenVINO 加速，云瞰每一帧。*
+*云瞰每一帧。*

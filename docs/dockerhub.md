@@ -2,14 +2,16 @@
 
 Unofficial web workbench for [YunKan](https://github.com/mrtian2016/yunkan) / SkyView: free-form live mosaic, AI events, timeline playback.
 
-云瞰非官方 Web 工作台。不替换官方容器，只反向代理本机 API `23326` 和 HLS `23406`。
+Works with official YunKan editions (OpenVINO, CUDA, TensorRT, trainer, CPU, …). Does not replace the YunKan container — reverse-proxies API `23326` and HLS `23406`.
+
+云瞰非官方 Web 工作台，兼容官方各版本，不替换云瞰本体。
 
 - **GitHub:** https://github.com/s1oz/yunkan-ui
 - **Image:** `s1oz/yunkan-ui:latest` · also `ghcr.io/s1oz/yunkan-ui:latest`
 
 > Unofficial. Not affiliated with the YunKan authors. YunKan itself is commercial, closed-source, licensed per household.
 
-Slogan: **OpenVINO 加速，云瞰每一帧**
+Slogan: **云瞰每一帧**
 
 ## Run (same machine as YunKan)
 

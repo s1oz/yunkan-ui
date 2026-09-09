@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""YunKan-OpenVINO UI — static files + same-origin reverse proxy to the API."""
+"""YunKan-UI — static files + same-origin reverse proxy to the YunKan API."""
 
 from __future__ import annotations
 
@@ -144,7 +144,7 @@ class Handler(SimpleHTTPRequestHandler):
 
 
 def main():
-    p = argparse.ArgumentParser(description="YunKan-OpenVINO UI")
+    p = argparse.ArgumentParser(description="YunKan-UI")
     p.add_argument("--api", default=DEFAULT_API, help="后端 API 地址")
     p.add_argument("--media", default=DEFAULT_MEDIA, help="原 UI / 媒体代理（HLS）")
     p.add_argument("--host", default="0.0.0.0")
@@ -157,7 +157,7 @@ def main():
     Handler.media_base = args.media.rstrip("/")
     httpd = ThreadingHTTPServer((args.host, args.port), Handler)
     url = f"http://127.0.0.1:{args.port}"
-    print(f"YunKan-OpenVINO  {url}")
+    print(f"YunKan-UI        {url}")
     print(f"Preview          {url}/?demo=1")
     print(f"API proxy        {Handler.api_base}")
     print(f"Media proxy      {Handler.media_base}")

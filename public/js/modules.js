@@ -1,7 +1,7 @@
-/** YunKan-OpenVINO — optional add-on catalog. */
+/** YunKan-UI — optional add-on catalog. */
 
-export const SLOGAN = "OpenVINO 加速，云瞰每一帧";
-export const PRODUCT = "YunKan-OpenVINO";
+export const SLOGAN = "云瞰每一帧";
+export const PRODUCT = "YunKan-UI";
 export const STORE_KEY = "yunkan.addons";
 export const PRESET_KEY = "yunkan.preset";
 export const FIRST_KEY = "yunkan.firstRun";
@@ -86,10 +86,10 @@ export const CATALOG = [
     group: "intel",
     defaultOn: false,
     apis: 27,
-    blurb: "样本标注、本地/云端训练、OpenVINO 引擎与 VLM 导入。",
+    blurb: "样本标注、本地/云端训练、推理引擎与 VLM 导入。",
     features: [
       { id: "label", name: "标注与训练任务", defaultOn: true, cover: "partial" },
-      { id: "tensorrt", name: "OpenVINO / TensorRT 引擎", defaultOn: true, cover: "partial" },
+      { id: "tensorrt", name: "推理引擎（OpenVINO / TensorRT / CUDA）", defaultOn: true, cover: "partial" },
       { id: "vlm", name: "VLM 视觉模型", defaultOn: false, cover: "api" },
     ],
   },

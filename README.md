@@ -1,8 +1,8 @@
-# YunKan-OpenVINO UI
+# YunKan-UI
 
 <img src="unraid-icon.png" width="88" alt="YunKan-UI icon" align="right">
 
-**An alternative web workbench for [YunKan](https://github.com/mrtian2016/yunkan) — mosaic live view, AI events, and timeline playback. OpenVINO on the box, one page in the browser.**
+**An alternative web workbench for [YunKan](https://github.com/mrtian2016/yunkan) — mosaic live view, AI events, and timeline playback. One page in the browser; inference stays on your box.**
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Docker Pulls](https://img.shields.io/docker/pulls/s1oz/yunkan-ui.svg)](https://hub.docker.com/r/s1oz/yunkan-ui)
@@ -12,11 +12,11 @@
 
 ---
 
-This is a **rewritten web UI**, not a reskin of the stock admin. It talks to the same local YunKan / SkyView API that the official Docker image already exposes. Video and inference stay on your machine.
+This is a **rewritten web UI**, not a reskin of the stock admin. It talks to the same local YunKan / SkyView API used by the official images (**OpenVINO, CUDA, TensorRT, trainer, CPU**, and other editions). Video and inference stay on your machine.
 
 > Unofficial. Not affiliated with or endorsed by the YunKan authors. YunKan itself is commercial, closed-source, licensed per household.
 
-Slogan: **OpenVINO 加速，云瞰每一帧**.
+Slogan: **云瞰每一帧**.
 
 ## Screenshots
 
@@ -160,7 +160,7 @@ Hub’s own “Automated Builds” (link GitHub under Hub → Builds) is optiona
 
 ## Unraid
 
-1. YunKan is already running (Community Apps: **YunKan-OpenVINO** / CUDA / CPU). Leave it alone.
+1. YunKan is already running (Community Apps: **YunKan** — OpenVINO / CUDA / TensorRT / trainer / CPU, etc.). Leave that container alone.
 2. Add container, image `s1oz/yunkan-ui:latest`, network **host**, env `YUNKAN_API=http://127.0.0.1:23326`, `YUNKAN_MEDIA=http://127.0.0.1:23406`, `PORT=18081`. Or clone and compose:
 
 ```bash
@@ -219,4 +219,4 @@ YunKan the product remains commercial and closed-source. Use this workbench only
 
 ---
 
-*OpenVINO 加速，云瞰每一帧.*
+*云瞰每一帧.*
