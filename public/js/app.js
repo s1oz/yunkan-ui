@@ -493,8 +493,15 @@ async function fillAuthImg(img) {
     try {
       const r = await api.blob(src);
       if (!r?.blob || !img.isConnected) return;
-      img.src = blobUrl(r.blob);
+      const prev = img.dataset.blobUrl;
+      const next = blobUrl(r.blob);
+      img.src = next;
+      img.dataset.blobUrl = next;
       img.dataset.hydrated = src;
+      if (prev && prev.startsWith("blob:") && prev !== next) {
+        URL.revokeObjectURL(prev);
+        blobs.delete(prev);
+      }
       if (img.closest(".ev-frame, .zview, .evpop")) {
         try { await img.decode(); } catch {}
       }
@@ -520,9 +527,14 @@ function observeLazyImg(img) {
   lazyImgIo.observe(img);
 }
 async function hydrate(rootEl) {
+  if (lazyImgIo) {
+    lazyImgIo.disconnect();
+    lazyImgIo = null;
+  }
   const imgs = $$("img[data-src]", rootEl);
   const eager = [];
   for (const img of imgs) {
+    img._lazyOn = false;
     if (img.closest(".rail-list")) observeLazyImg(img);
     else eager.push(img);
   }
@@ -2548,7 +2560,6 @@ async function render() {
     if (S._snapTimer) { clearInterval(S._snapTimer); S._snapTimer = 0; }
     if (S._liveWatch) { clearInterval(S._liveWatch); S._liveWatch = 0; }
   }
-  wipeBlobs();
   if (S.route !== "replay" && replayTimer) {
     cancelAnimationFrame(replayTimer);
     replayTimer = 0;
@@ -2612,6 +2623,7 @@ async function render() {
   await hydrate(root);
   bindClock();
   applyMediaVolume();
+  wipeBlobs();
 }
 
 async function renderGate() {

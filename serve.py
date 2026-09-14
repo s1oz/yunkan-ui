@@ -62,16 +62,22 @@ class Handler(SimpleHTTPRequestHandler):
         return SimpleHTTPRequestHandler.do_GET(self)
 
     def do_POST(self):
-        self._proxy()
+        self._proxy_or_404()
 
     def do_PUT(self):
-        self._proxy()
+        self._proxy_or_404()
 
     def do_PATCH(self):
-        self._proxy()
+        self._proxy_or_404()
 
     def do_DELETE(self):
-        self._proxy()
+        self._proxy_or_404()
+
+    def _proxy_or_404(self):
+        if self._is_api():
+            self._proxy()
+        else:
+            self.send_error(404)
 
     def _is_api(self) -> bool:
         path = urlsplit(self.path).path

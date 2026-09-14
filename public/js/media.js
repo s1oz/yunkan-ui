@@ -35,15 +35,18 @@ export function playMedia(el, wantSound) {
   p.catch(() => {
     el.muted = true;
     el.play().catch(() => {});
+    if (el._ykUnmute) return;
     const unmute = () => {
+      el._ykUnmute = null;
       if (el.closest?.("#home-keep") && !document.body.classList.contains("yk-home")) return;
       el.muted = false;
       el.volume = mediaVolume();
-      el.play().then(() => window.removeEventListener("pointerdown", unmute)).catch(() => {
+      el.play().catch(() => {
         el.muted = true;
         el.play().catch(() => {});
       });
     };
+    el._ykUnmute = unmute;
     window.addEventListener("pointerdown", unmute, { once: true });
   });
 }
@@ -91,19 +94,27 @@ export function attachHls(video, url, key, muted = true, extra = {}) {
     let shown = false;
     const failOnce = () => { if (!shown) { shown = true; onFail(); } };
     const okOnce = () => { if (!shown) { shown = true; onPlay(); } };
+    const liveLooksReady = () => !needVideo || (video.videoWidth > 0 && video.readyState >= 2 && !video.paused);
     hls.on(window.Hls.Events.MANIFEST_PARSED, () => { playMedia(video, !muted); });
     video.addEventListener("playing", () => {
-      if (!needVideo) { okOnce(); return; }
-      setTimeout(() => {
-        if (video.videoWidth > 0 && video.readyState >= 2 && !video.paused) okOnce();
+      let tries = needVideo ? 8 : 1;
+      const check = () => {
+        if (shown) return;
+        if (liveLooksReady()) okOnce();
+        else if (--tries > 0) setTimeout(check, 400);
         else failOnce();
-      }, 400);
+      };
+      check();
     }, { once: true });
     video.addEventListener("error", failOnce);
     hls.on(window.Hls.Events.ERROR, (_, d) => {
       if (d?.fatal) { try { hls.destroy(); } catch {} failOnce(); }
     });
-    setTimeout(() => { if (!shown) failOnce(); }, needVideo ? 8000 : 6000);
+    setTimeout(() => {
+      if (shown) return;
+      if (liveLooksReady()) okOnce();
+      else failOnce();
+    }, needVideo ? 8000 : 6000);
     rec.hls = hls;
     players.set(key, rec);
     return true;
@@ -111,12 +122,21 @@ export function attachHls(video, url, key, muted = true, extra = {}) {
   if (video.canPlayType("application/vnd.apple.mpegurl")) {
     video.src = url;
     playMedia(video, !muted);
+    let shown = false;
+    const failOnce = () => { if (!shown) { shown = true; onFail(); } };
+    const okOnce = () => { if (!shown) { shown = true; onPlay(); } };
     video.addEventListener("playing", () => {
-      if (!needVideo || video.videoWidth > 0) { video.hidden = needVideo ? false : video.hidden; onPlay(); }
-      else onFail();
+      if (!needVideo || video.videoWidth > 0) {
+        if (needVideo) video.hidden = false;
+        okOnce();
+      } else failOnce();
     }, { once: true });
-    video.addEventListener("error", onFail, { once: true });
-    setTimeout(() => { if (needVideo && video.videoWidth <= 0) onFail(); }, 8000);
+    video.addEventListener("error", failOnce, { once: true });
+    setTimeout(() => {
+      if (shown) return;
+      if (!needVideo || (video.videoWidth > 0 && !video.paused)) okOnce();
+      else failOnce();
+    }, 8000);
     players.set(key, rec);
     return true;
   }
@@ -142,29 +162,4 @@ export function catchUpLive(p) {
   return false;
 }
 
-export function fsElement() {
-  return document.fullscreenElement || document.webkitFullscreenElement || null;
-}
 
-export async function requestFs(el) {
-  if (!el) return false;
-  const req = el.requestFullscreen || el.webkitRequestFullscreen;
-  if (!req) return false;
-  await req.call(el);
-  return true;
-}
-
-export async function exitFs() {
-  const fn = document.exitFullscreen || document.webkitExitFullscreen;
-  if (!fn || !fsElement()) return false;
-  await fn.call(document);
-  return true;
-}
-
-export async function toggleFs(el) {
-  if (!el) return false;
-  const cur = fsElement();
-  if (cur === el) return exitFs();
-  if (cur) await exitFs();
-  return requestFs(el);
-}
