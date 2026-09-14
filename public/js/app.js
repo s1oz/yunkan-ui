@@ -686,14 +686,33 @@ function camDayStats() {
   return map;
 }
 
+function currentUnreadCount() {
+  const apiN = Math.max(0, Number(S.unread) || 0);
+  const ids = new Set();
+  for (const e of [...(S.events || []), ...(S.recent || [])]) {
+    if (e && e.unread && e.id != null) ids.add(String(e.id));
+  }
+  return Math.max(apiN, ids.size);
+}
+
 function unreadActionsHtml() {
-  if (!S.unread) return "";
-  return `<span class="pill accent unread-pill">${S.unread > 99 ? "99+" : S.unread} 未读</span>
-    <button class="btn sm" data-act="read-all">全部已读</button>`;
+  const n = currentUnreadCount();
+  if (!n) return "";
+  return `<span class="pill accent unread-pill">${n > 99 ? "99+" : n} 未读</span>
+    <button type="button" class="btn sm" data-act="read-all">全部已读</button>`;
+}
+
+function eventsReadBarHtml() {
+  const n = currentUnreadCount();
+  return `<div class="toolbar ev-readbar">
+    <span class="pill ${n ? "accent" : ""} ev-read-count">${n ? `${n > 99 ? "99+" : n} 未读` : "没有未读"}</span>
+    <div class="grow"></div>
+    <button type="button" class="btn sm ${n ? "primary" : ""}" data-act="read-all" ${n ? "" : "disabled"}>全部已读</button>
+  </div>`;
 }
 
 function syncUnreadUi() {
-  const n = Math.max(0, Number(S.unread) || 0);
+  const n = currentUnreadCount();
   S.unread = n;
   const nav = document.querySelector('.cats a[href="#/events"]');
   if (nav) {
@@ -711,7 +730,17 @@ function syncUnreadUi() {
     if (n) el.textContent = `${n > 99 ? "99+" : n} 未读`;
     else el.remove();
   });
-  if (!n) $$("[data-act=read-all]").forEach((el) => el.remove());
+  const barCount = $(".ev-read-count");
+  if (barCount) {
+    barCount.textContent = n ? `${n > 99 ? "99+" : n} 未读` : "没有未读";
+    barCount.classList.toggle("accent", !!n);
+  }
+  $$("[data-act=read-all]").forEach((el) => {
+    if (el.closest(".ev-readbar")) {
+      el.disabled = !n;
+      el.classList.toggle("primary", !!n);
+    } else if (!n) el.remove();
+  });
   const stats = camDayStats();
   $$(".bar-cam").forEach((btn) => {
     const st = stats[btn.dataset.id] || { unread: 0, total: 0 };
@@ -751,10 +780,11 @@ async function markEventRead(id) {
 
 async function markAllEventsRead() {
   await api.post("/api/events/read-all", {});
-  for (const e of [...S.recent, ...S.events]) if (e) e.unread = false;
+  for (const e of [...S.recent, ...S.events, ...(S.replayAllEvents || [])]) if (e) e.unread = false;
   if (S.event) S.event.unread = false;
   if (S.eventPop) S.eventPop.unread = false;
   S.unread = 0;
+  S._unreadAt = Date.now();
   $$(".ev.unread").forEach((el) => {
     el.classList.remove("unread");
     el.querySelector(".ev-unread")?.remove();
@@ -806,10 +836,12 @@ function chrome(inner, wide = false) {
       </span>
       ${S.alerts.length ? `<button class="alert-btn" data-act="open-alerts" title="${esc(findingText(S.alerts[0]) || "自检警告")}">${I.alert}</button>` : ""}
       ${u ? `
-        <button class="unread-chip" data-act="open-unread" data-id="${esc(u.id)}" title="最新事件">
-          ${eventSnap(u) ? `<img data-src="${esc(eventSnapUrl(u, { w: 160 }))}" alt="" />` : ""}
-          <span class="grow"><b>${esc(u.camera_name || "")}</b><i>${esc(fmtTime(u.event_time))}</i></span>
-          ${S.unread ? `<span class="count">${S.unread > 99 ? "99+" : S.unread}</span>` : ""}
+        <button class="unread-chip" data-act="open-unread" data-id="${esc(u.id)}" title="${esc([u.camera_name || "事件", fmtTime(u.event_time)].filter(Boolean).join(" · "))}">
+          <span class="unread-thumb">
+            ${eventSnap(u) ? `<img data-src="${esc(eventSnapUrl(u, { w: 160 }))}" alt="" />` : ""}
+            ${S.unread ? `<span class="count">${S.unread > 99 ? "99+" : S.unread}</span>` : ""}
+          </span>
+          <span class="unread-meta"><b>${esc(u.camera_name || "事件")}</b><i>${esc(fmtTime(u.event_time))}</i></span>
         </button>` : ""}
       <div class="who">
         ${volHtml()}
@@ -1478,8 +1510,8 @@ function eventsPage() {
       <aside class="rail">
         <div class="rail-h">
           <input class="search" data-act="ev-q" placeholder="搜索" value="${esc(S.q)}" style="width:140px;flex:1" />
-          ${unreadActionsHtml()}
         </div>
+        ${eventsReadBarHtml()}
         <div class="toolbar cam-filter" style="padding:6px 8px;margin:0">
           <button class="chip ${!S.evCam ? "on" : ""}" data-act="cam-events" data-id="">全部</button>
           ${S.cameras.map((c) => {
@@ -2770,7 +2802,14 @@ root.addEventListener("submit", async (e) => {
 });
 
 root.addEventListener("click", async (e) => {
-  if (e.target.id === "evpop") { closeEventPop(); return; }
+  const pop = e.target.closest?.("#evpop");
+  if (pop && !e.target.closest(".evpop-h, .evpop-f, button, a, input, .chip, img")) {
+    const st = zoomMap.get("evpop") || { s: 1 };
+    if (st.s <= 1.01) {
+      closeEventPop();
+      return;
+    }
+  }
   const el = e.target.closest("[data-act]");
   if (!el || el.tagName === "FORM") return;
   const act = el.dataset.act;
@@ -3006,6 +3045,7 @@ root.addEventListener("click", async (e) => {
     if (act === "ev-type") { S.evType = el.dataset.v; await render(); }
     if (act === "read-all") {
       e.preventDefault();
+      if (el.disabled) return;
       await markAllEventsRead();
       return;
     }
