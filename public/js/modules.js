@@ -40,7 +40,7 @@ export const CATALOG = [
     apis: 19,
     blurb: "检测事件、带框快照、运动轨迹、已读、反馈与跳转回放。",
     features: [
-      { id: "sse", name: "实时推送", defaultOn: true, cover: "partial" },
+      { id: "sse", name: "实时推送", defaultOn: true, cover: "ready" },
       { id: "boxes", name: "检测框 annotate", defaultOn: true, cover: "ready" },
       { id: "tracks", name: "运动轨迹", defaultOn: true, cover: "ready" },
       { id: "feedback", name: "正误反馈", defaultOn: true, cover: "ready" },

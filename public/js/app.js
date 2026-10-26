@@ -408,9 +408,288 @@ async function loadRecentEvents(force = false) {
   }
   await loadTripwires();
   if (list.some(extraLooksEmpty)) await hydrateEventExtras(list);
-  S.recent = list.sort((a, b) => toMs(b.event_time) - toMs(a.event_time));
+  const incoming = list.sort((a, b) => toMs(b.event_time) - toMs(a.event_time));
+  const seen = new Set(incoming.map((e) => String(e.id)));
+  const pending = (S.recent || []).filter((e) => e && e.id != null && !seen.has(String(e.id)) && S._liveSeen?.has(String(e.id)));
+  S.recent = [...pending, ...incoming].sort((a, b) => toMs(b.event_time) - toMs(a.event_time)).slice(0, 80);
   S._recentAt = Date.now();
   return S.recent;
+}
+
+const LIVE_IGNORE = new Set(["hello", "ping", "keepalive", "heartbeat", "ready", "connected"]);
+
+function takeSseFrames(buffer) {
+  const parts = String(buffer || "").split(/\r?\n\r?\n/);
+  const rest = parts.pop() ?? "";
+  const frames = [];
+  for (const block of parts) {
+    if (!block.trim()) continue;
+    let name = "message";
+    const data = [];
+    for (const line of block.split(/\r?\n/)) {
+      if (!line || line.startsWith(":")) continue;
+      if (line.startsWith("event:")) name = line.slice(6).trim();
+      else if (line.startsWith("data:")) data.push(line.slice(5).replace(/^ /, ""));
+    }
+    frames.push({ name, data: data.join("\n") });
+  }
+  return { frames, rest };
+}
+
+function liveNorm(raw) {
+  if (!raw || typeof raw !== "object") return null;
+  const hasRead = ["unread", "is_unread", "is_read", "read", "has_read", "read_at"].some((k) => k in raw);
+  const ev = normEvent(raw);
+  if (!ev || ev.id == null || ev.id === "") return null;
+  if (!hasRead) ev.unread = true;
+  if (!ev.camera_name && ev.camera_id) {
+    const cam = S.cameras.find((c) => camId(c) === String(ev.camera_id));
+    if (cam) ev.camera_name = camName(cam);
+  }
+  return ev;
+}
+
+function eventsFromStreamPayload(payload, name) {
+  if (LIVE_IGNORE.has(String(name || "").toLowerCase())) return [];
+  if (payload == null) return [];
+  if (typeof payload === "string") {
+    try { payload = JSON.parse(payload); } catch { return []; }
+  }
+  if (Array.isArray(payload)) return payload.flatMap((p) => eventsFromStreamPayload(p, name));
+  if (typeof payload !== "object") return [];
+  const kind = String(payload.type || payload.kind || "").toLowerCase();
+  if (LIVE_IGNORE.has(kind)) return [];
+  if (Array.isArray(payload.events)) return payload.events.flatMap((p) => eventsFromStreamPayload(p, name));
+  const nested = [payload.event, payload.payload, payload.data, payload.item]
+    .find((v) => v && typeof v === "object" && !Array.isArray(v));
+  const src = nested && (nested.id != null || nested.event_id != null || nested.camera_id != null || nested.type || nested.event_type)
+    ? { ...payload, ...nested }
+    : payload;
+  if (src.id == null && src.event_id == null) return [];
+  const ev = liveNorm(src);
+  return ev ? [ev] : [];
+}
+
+function knownEvent(id) {
+  const s = String(id);
+  if (S._liveSeen?.has(s)) return true;
+  return [...(S.recent || []), ...(S.events || []), ...(S.replayAllEvents || [])].some((e) => e && String(e.id) === s);
+}
+
+function eventTypeKey(ev) {
+  const raw = String(ev?.type || ev?.event_type || ev?.label || ev?.extra?.detections?.[0]?.label || "").toLowerCase();
+  if (raw === "car" || raw === "truck" || raw === "bus" || raw === "vehicle") return "vehicle";
+  if (raw === "cat" || raw === "dog" || raw === "pet" || raw === "bird") return "pet";
+  if (raw === "human" || raw === "people" || raw === "person") return "person";
+  return raw;
+}
+
+function eventMatchesFilters(ev) {
+  if (S.evCam && String(ev.camera_id) !== String(S.evCam)) return false;
+  if (S.evType && eventTypeKey(ev) !== S.evType) return false;
+  if (S.q) {
+    const blob = `${ev.summary || ""} ${ev.summary_zh || ""} ${ev.camera_name || ""} ${eventTitle(ev)}`.toLowerCase();
+    if (!blob.includes(String(S.q).toLowerCase())) return false;
+  }
+  return true;
+}
+
+function unreadChipHtml(u, n) {
+  const count = n > 99 ? "99+" : String(n || "");
+  return `<button class="unread-chip" data-act="open-unread" data-id="${esc(u.id)}" title="${esc([u.camera_name || "事件", fmtTime(u.event_time)].filter(Boolean).join(" · "))}">
+          <span class="unread-thumb">
+            ${eventSnap(u) ? `<img data-src="${esc(eventSnapUrl(u, { w: 160 }))}" alt="" />` : ""}
+            ${n ? `<span class="count">${count}</span>` : ""}
+          </span>
+          <span class="unread-meta"><b>${esc(u.camera_name || "事件")}</b><i>${esc(fmtTime(u.event_time))}</i></span>
+        </button>`;
+}
+
+let liveStop = null;
+let livePullTimer = 0;
+
+function stopLiveEvents() {
+  if (livePullTimer) { clearTimeout(livePullTimer); livePullTimer = 0; }
+  if (liveStop) liveStop();
+  liveStop = null;
+  S._liveEvents = false;
+}
+
+function schedulePull() {
+  if (livePullTimer || !api.token || api.demo) return;
+  livePullTimer = setTimeout(() => {
+    livePullTimer = 0;
+    pullNewEvents().catch(() => {});
+  }, 400);
+}
+
+async function enrichLiveEvent(ev) {
+  if (!ev?.id) return ev;
+  if (ev.summary || ev.summary_zh || ev.snapshot_url || ev.title) return ev;
+  try {
+    const d = await api.get(`/api/events/${encodeURIComponent(ev.id)}`);
+    if (d && typeof d === "object") return liveNorm({ ...ev, ...d, id: ev.id, unread: ev.unread }) || ev;
+  } catch {}
+  return ev;
+}
+
+function paintLiveEvent(ev) {
+  if (ev.unread) S.unread = (Number(S.unread) || 0) + 1;
+  const route = S.route === "live" ? "home" : S.route;
+  if (route === "home" && $("#home-keep .rail-list")) {
+    refreshHomeRail();
+    const rail = $("#home-keep .rail-list");
+    if (rail) hydrate(rail);
+  }
+  if (route === "events" && eventMatchesFilters(ev)) {
+    S.events.unshift(ev);
+    if (S.events.length > 80) S.events.length = 80;
+    const list = $(".ev-stage .rail-list");
+    if (list) {
+      list.querySelector(":scope > .empty")?.remove();
+      list.insertAdjacentHTML("afterbegin", eventCard(ev, { act: "select-ev" }));
+      const card = list.firstElementChild;
+      if (card) hydrate(card);
+    }
+    if (!S.event) {
+      S.event = ev;
+      const view = $("#ev-view");
+      if (view) {
+        view.innerHTML = eventStageHtml(ev);
+        hydrate(view).then(() => bindEventOverlay());
+      }
+    }
+  }
+  if (route === "replay") {
+    S.replayAllEvents = [ev, ...(S.replayAllEvents || []).filter((e) => String(e.id) !== String(ev.id))];
+    const rail = $(".jump-rail");
+    if (rail) {
+      rail.innerHTML = replayRailHtml();
+      hydrate(rail);
+    }
+    if ($("#tl")) refreshTimelineDom();
+  }
+  syncUnreadUi();
+  const when = toMs(ev.event_time);
+  if (!when || when > Date.now() - 2 * 60 * 1000) {
+    const who = ev.camera_name || ev.camera_id || "摄像机";
+    toast(`${who} · ${eventTitle(ev)}`);
+  }
+}
+
+async function acceptLiveEvent(raw) {
+  const ev = liveNorm(raw) || raw;
+  if (!ev?.id || knownEvent(ev.id)) return;
+  if (!S._liveSeen) S._liveSeen = new Set();
+  S._liveSeen.add(String(ev.id));
+  const full = await enrichLiveEvent(ev);
+  if (!S.recent.some((e) => String(e.id) === String(full.id))) {
+    S.recent.unshift(full);
+    if (S.recent.length > 80) S.recent.length = 80;
+  }
+  paintLiveEvent(full);
+}
+
+async function pullNewEvents() {
+  if (!api.token || api.demo) return;
+  let list = [];
+  try { list = eventList(await api.get("/api/events/recent", { limit: 30 })); }
+  catch {
+    try { list = eventList(await api.get("/api/events", { limit: 30 })); } catch { return; }
+  }
+  list.sort((a, b) => toMs(a.event_time) - toMs(b.event_time));
+  for (const ev of list) {
+    if (!knownEvent(ev.id)) await acceptLiveEvent(ev);
+  }
+}
+
+async function onSseFrame(frame) {
+  const name = String(frame?.name || "message").toLowerCase();
+  if (!frame?.data || LIVE_IGNORE.has(name)) return;
+  let payload = frame.data;
+  try { payload = JSON.parse(frame.data); }
+  catch { schedulePull(); return; }
+  const list = eventsFromStreamPayload(payload, name);
+  if (!list.length) {
+    const kind = String(payload?.type || payload?.kind || "").toLowerCase();
+    if (!LIVE_IGNORE.has(kind)) schedulePull();
+    return;
+  }
+  for (const ev of list) await acceptLiveEvent(ev);
+}
+
+async function consumeEventStream(signal) {
+  let ticket = "";
+  try {
+    const t = await api.post("/api/auth/sse-ticket", {});
+    ticket = typeof t === "string" ? t : (t?.ticket || t?.token || t?.sse_ticket || "");
+  } catch (e) {
+    if (e.status === 401) throw e;
+  }
+  if (!ticket) {
+    const err = new Error("no sse ticket");
+    err.status = 503;
+    throw err;
+  }
+  const r = await fetch(`/api/events/stream?ticket=${encodeURIComponent(ticket)}`, {
+    headers: { Accept: "text/event-stream", Authorization: api.token ? `Bearer ${api.token}` : "" },
+    signal,
+  });
+  if (signal.aborted) return;
+  if (!r.ok || !r.body) {
+    const err = new Error(`sse ${r.status}`);
+    err.status = r.status;
+    throw err;
+  }
+  const reader = r.body.getReader();
+  const dec = new TextDecoder();
+  let buf = "";
+  while (!signal.aborted) {
+    const { value, done } = await reader.read();
+    if (done) break;
+    buf += dec.decode(value, { stream: true });
+    const taken = takeSseFrames(buf);
+    buf = taken.rest;
+    for (const frame of taken.frames) await onSseFrame(frame);
+  }
+}
+
+function ensureLiveEvents() {
+  if (api.demo || !api.token || !feat("events", "sse")) {
+    stopLiveEvents();
+    return;
+  }
+  if (S._liveEvents) return;
+  S._liveEvents = true;
+  let stopped = false;
+  let ctrl = null;
+  let timer = 0;
+  const halt = () => {
+    stopped = true;
+    S._liveEvents = false;
+    if (timer) { clearTimeout(timer); timer = 0; }
+    try { ctrl?.abort(); } catch {}
+  };
+  liveStop = halt;
+  const run = async () => {
+    if (stopped) return;
+    ctrl = new AbortController();
+    let failed = false;
+    let auth = false;
+    try {
+      await consumeEventStream(ctrl.signal);
+    } catch (e) {
+      if (stopped || e?.name === "AbortError") return;
+      failed = true;
+      auth = e?.status === 401;
+    }
+    if (stopped) return;
+    if (auth) { halt(); return; }
+    try { await pullNewEvents(); } catch {}
+    if (stopped) return;
+    timer = setTimeout(run, failed ? 4000 : 800);
+  };
+  run();
 }
 
 function spacePct() {
@@ -749,6 +1028,36 @@ function syncUnreadUi() {
     em.textContent = st.unread;
     em.classList.toggle("zero", !st.unread);
   });
+  syncUnreadChip();
+}
+
+function syncUnreadChip() {
+  const n = currentUnreadCount();
+  const u = latestUnread();
+  const cur = document.querySelector(".bar .unread-chip");
+  if (!n || !u) { cur?.remove(); return; }
+  if (!cur) {
+    const who = document.querySelector(".bar .who");
+    if (!who) return;
+    who.insertAdjacentHTML("beforebegin", unreadChipHtml(u, n));
+    const chip = document.querySelector(".bar .unread-chip");
+    if (chip) hydrate(chip);
+    return;
+  }
+  cur.dataset.id = String(u.id);
+  cur.title = [u.camera_name || "事件", fmtTime(u.event_time)].filter(Boolean).join(" · ");
+  const count = cur.querySelector(".count");
+  if (count) count.textContent = n > 99 ? "99+" : String(n);
+  const b = cur.querySelector(".unread-meta b");
+  const i = cur.querySelector(".unread-meta i");
+  if (b) b.textContent = u.camera_name || "事件";
+  if (i) i.textContent = fmtTime(u.event_time);
+  const src = eventSnap(u) ? eventSnapUrl(u, { w: 160 }) : "";
+  const img = cur.querySelector("img");
+  if (src && img && img.dataset.hydrated !== src) {
+    img.dataset.src = src;
+    hydrate(cur);
+  }
 }
 
 function markEventReadLocal(id) {
@@ -835,14 +1144,7 @@ function chrome(inner, wide = false) {
         <span class="stat">解码 <b>${esc(metricLabel(decodeMs()))}</b></span>
       </span>
       ${S.alerts.length ? `<button class="alert-btn" data-act="open-alerts" title="${esc(findingText(S.alerts[0]) || "自检警告")}">${I.alert}</button>` : ""}
-      ${u ? `
-        <button class="unread-chip" data-act="open-unread" data-id="${esc(u.id)}" title="${esc([u.camera_name || "事件", fmtTime(u.event_time)].filter(Boolean).join(" · "))}">
-          <span class="unread-thumb">
-            ${eventSnap(u) ? `<img data-src="${esc(eventSnapUrl(u, { w: 160 }))}" alt="" />` : ""}
-            ${S.unread ? `<span class="count">${S.unread > 99 ? "99+" : S.unread}</span>` : ""}
-          </span>
-          <span class="unread-meta"><b>${esc(u.camera_name || "事件")}</b><i>${esc(fmtTime(u.event_time))}</i></span>
-        </button>` : ""}
+      ${u ? unreadChipHtml(u, S.unread) : ""}
       <div class="who">
         ${volHtml()}
         <button class="btn icon ghost" data-act="orig-settings" title="跳转原生系统设置" aria-label="跳转原生系统设置">${I.gear}</button>
@@ -2599,6 +2901,7 @@ async function render() {
   if (parsed.query.cam) S.evCam = parsed.query.cam;
   if (S.route === "system" && parsed.query.tab) S.sysTab = parsed.query.tab;
   if (!api.token && !api.demo) {
+    stopLiveEvents();
     discardMosaic();
     stopAllPlayers();
     await renderGate();
@@ -2656,6 +2959,7 @@ async function render() {
   bindClock();
   applyMediaVolume();
   wipeBlobs();
+  ensureLiveEvents();
 }
 
 async function renderGate() {
@@ -2818,9 +3122,10 @@ root.addEventListener("click", async (e) => {
     if (act === "do-login") { e.preventDefault(); e.stopPropagation(); await submitGate(el.closest("form")); return; }
     if (act === "demo") { enterDemo(); enterApp(); go("/home"); await render(); return; }
     if (act === "logout") {
+      stopLiveEvents();
       discardMosaic();
       stopAllPlayers();
-      api.logout(); S.me = null; S.cameras = []; go("/home"); await render(); return;
+      api.logout(); S.me = null; S.cameras = []; S.recent = []; S.events = []; S._liveSeen = new Set(); go("/home"); await render(); return;
     }
     if (act === "toggle-nav") {
       S.navOn = !S.navOn;
@@ -3345,6 +3650,7 @@ document.addEventListener("visibilitychange", () => {
     return;
   }
   recoverMosaicLive();
+  pullNewEvents().catch(() => {});
 });
 window.addEventListener("focus", () => {
   if (!document.hidden) recoverMosaicLive();

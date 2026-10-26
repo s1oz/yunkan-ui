@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import http.client
 import os
+import socket
 import sys
 import webbrowser
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
@@ -28,7 +29,46 @@ HOP = {
     "transfer-encoding",
     "upgrade",
     "host",
+    "content-length",
 }
+
+
+def _is_stream(path: str, content_type: str) -> bool:
+    ctype = (content_type or "").lower()
+    if "text/event-stream" in ctype:
+        return True
+    return path.rstrip("/").endswith("/stream")
+
+
+def _read_upstream_piece(resp, size=64 * 1024) -> bytes:
+    """Next body piece, without waiting until `size` bytes have piled up.
+
+    ``HTTPResponse.read(n)`` on a chunked body keeps pulling chunks until it
+    has n bytes. Detection events are much smaller than 64 KiB, so that wait
+    holds the first event until the browser gives up and the user refreshes.
+    """
+    if getattr(resp, "chunked", False):
+        left = resp._get_chunk_left()
+        if not left:
+            return b""
+        data = resp._safe_read(left)
+        resp.chunk_left = 0
+        return data
+    if resp.length == 0:
+        return b""
+    if resp.fp is None:
+        return b""
+    # BufferedReader.read(n) blocks until n bytes or EOF. read1 returns
+    # whatever one socket read already has.
+    if resp.length is None:
+        return resp.fp.read1(size) or b""
+    n = min(size, resp.length)
+    data = resp.fp.read1(n) or b""
+    resp.length -= len(data)
+    if resp.length <= 0:
+        resp.length = 0
+        resp._close_conn()
+    return data
 
 
 class Handler(SimpleHTTPRequestHandler):
@@ -125,21 +165,47 @@ class Handler(SimpleHTTPRequestHandler):
             self.wfile.write(msg)
             return
 
+        ctype = ""
+        for k, v in resp.getheaders():
+            if k.lower() == "content-type":
+                ctype = v
+        path = urlsplit(self.path).path
+        stream = _is_stream(path, ctype)
+        try:
+            self.connection.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+        except OSError:
+            pass
+        if stream:
+            # Chunked HTTP/1.1 so the browser can paint each event immediately.
+            # The default HTTP/1.0 response has no length and waits for close.
+            self.protocol_version = "HTTP/1.1"
         self.send_response(resp.status)
         for k, v in resp.getheaders():
             if k.lower() in HOP:
                 continue
             self.send_header(k, v)
+        if stream:
+            self.send_header("Cache-Control", "no-cache, no-transform")
+            self.send_header("X-Accel-Buffering", "no")
+            self.send_header("Transfer-Encoding", "chunked")
         self.send_header("Connection", "close")
         self.end_headers()
         try:
             while True:
-                chunk = resp.read(64 * 1024)
+                chunk = _read_upstream_piece(resp)
                 if not chunk:
                     break
-                self.wfile.write(chunk)
+                if stream:
+                    self.wfile.write(b"%X\r\n" % len(chunk))
+                    self.wfile.write(chunk)
+                    self.wfile.write(b"\r\n")
+                else:
+                    self.wfile.write(chunk)
                 self.wfile.flush()
-        except (BrokenPipeError, ConnectionResetError):
+            if stream:
+                self.wfile.write(b"0\r\n\r\n")
+                self.wfile.flush()
+        except (BrokenPipeError, ConnectionResetError, http.client.IncompleteRead):
             pass
         finally:
             conn.close()
