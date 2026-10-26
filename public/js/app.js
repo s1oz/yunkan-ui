@@ -785,38 +785,73 @@ async function fillAuthImg(img) {
         try { await img.decode(); } catch {}
       }
     } catch { img.style.opacity = ".4"; }
+    finally { img._fillP = null; }
   })();
   return img._fillP;
 }
-let lazyImgIo = null;
-function observeLazyImg(img) {
-  if (!img || img._lazyOn) return;
-  if (img.closest("#home-keep") && !document.body.classList.contains("yk-home")) return;
-  if (!lazyImgIo) {
-    lazyImgIo = new IntersectionObserver((entries) => {
-      for (const en of entries) {
-        if (!en.isIntersecting) continue;
-        lazyImgIo.unobserve(en.target);
-        en.target._lazyOn = false;
-        if (en.target.isConnected) fillAuthImg(en.target);
-      }
-    }, { rootMargin: "200px" });
+
+const railLazy = new WeakMap();
+
+function pumpRailImages(root) {
+  if (!root) return;
+  const box = root.getBoundingClientRect();
+  if (box.height < 2) return;
+  const margin = 180;
+  for (const img of root.querySelectorAll("img[data-src]")) {
+    if (!img.dataset.src) continue;
+    if (img.dataset.hydrated === img.dataset.src && (img.currentSrc || img.src)) continue;
+    const r = img.getBoundingClientRect();
+    if (r.bottom < box.top - margin || r.top > box.bottom + margin) continue;
+    fillAuthImg(img);
   }
-  img._lazyOn = true;
-  lazyImgIo.observe(img);
 }
+
+function ensureRailLazy(root) {
+  if (!root || railLazy.has(root)) return;
+  const io = new IntersectionObserver((entries) => {
+    for (const en of entries) {
+      if (!en.isIntersecting) continue;
+      io.unobserve(en.target);
+      en.target._lazyOn = false;
+      if (en.target.isConnected) fillAuthImg(en.target);
+    }
+  }, { root, rootMargin: "180px 0px", threshold: 0.01 });
+  railLazy.set(root, io);
+  let ticking = false;
+  root.addEventListener("scroll", () => {
+    if (ticking) return;
+    ticking = true;
+    requestAnimationFrame(() => {
+      ticking = false;
+      pumpRailImages(root);
+    });
+  }, { passive: true });
+}
+
+function observeLazyImg(img) {
+  if (!img) return;
+  if (img.dataset.hydrated === img.dataset.src && (img.currentSrc || img.src)) return;
+  if (img.closest("#home-keep") && !document.body.classList.contains("yk-home")) return;
+  const root = img.closest(".rail-list");
+  if (!root) { fillAuthImg(img); return; }
+  ensureRailLazy(root);
+  if (img._lazyOn) return;
+  img._lazyOn = true;
+  railLazy.get(root).observe(img);
+}
+
 async function hydrate(rootEl) {
-  if (lazyImgIo) {
-    lazyImgIo.disconnect();
-    lazyImgIo = null;
-  }
   const imgs = $$("img[data-src]", rootEl);
   const eager = [];
+  const lists = new Set();
   for (const img of imgs) {
-    img._lazyOn = false;
-    if (img.closest(".rail-list")) observeLazyImg(img);
-    else eager.push(img);
+    const list = img.closest(".rail-list");
+    if (list) {
+      lists.add(list);
+      observeLazyImg(img);
+    } else eager.push(img);
   }
+  for (const list of lists) pumpRailImages(list);
   await Promise.all(eager.map(fillAuthImg));
 }
 
